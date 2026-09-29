@@ -7,7 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { GAME_CONFIG } from './config';
 import { advanceFlight, createGameState, registerCollision, registerCut } from './state';
 
-interface Trace { group: THREE.Group; x: number; y: number }
+interface Trace { group: THREE.Group; body: THREE.Group; spin: THREE.Vector3; x: number; y: number }
 interface Projectile { mesh: THREE.Mesh; x: number; y: number }
 interface ParticleBurst { points: THREE.Points; velocities: Float32Array; age: number }
 
@@ -251,30 +251,76 @@ export class TraceGame {
     const x = THREE.MathUtils.randFloat(-GAME_CONFIG.fieldWidth * .48, GAME_CONFIG.fieldWidth * .48);
     const y = THREE.MathUtils.randFloat(GAME_CONFIG.fieldMinY + .4, GAME_CONFIG.fieldMaxY + 1.4);
     const group = new THREE.Group();
-    const shell = new THREE.Mesh(
-      new THREE.CapsuleGeometry(.28, .72, 5, 12),
-      new THREE.MeshStandardMaterial({ color: 0x263442, metalness: .82, roughness: .24, emissive: 0xff5b24, emissiveIntensity: 1.8 }),
-    );
-    shell.geometry.rotateX(Math.PI / 2);
-    const nose = new THREE.Mesh(
-      new THREE.ConeGeometry(.3, .72, 12),
-      new THREE.MeshBasicMaterial({ color: 0xffc56b }),
-    );
-    nose.geometry.rotateX(Math.PI / 2);
-    nose.position.z = .83;
-    const trail = new THREE.Mesh(
-      new THREE.ConeGeometry(.34, 2.5, 12, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0xff592e, transparent: true, opacity: .32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
-    );
-    trail.geometry.rotateX(-Math.PI / 2);
-    trail.position.z = -1.55;
+    const body = this.createMeteorBody();
+    const fireTrail = this.createMeteorTrail(46, 0xff7138, .22, .78);
+    const emberTrail = this.createMeteorTrail(28, 0xffd27a, .12, .9);
     const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(.58, 12, 12),
-      new THREE.MeshBasicMaterial({ color: 0xff7138, transparent: true, opacity: .16, blending: THREE.AdditiveBlending, depthWrite: false }),
+      new THREE.SphereGeometry(.92, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xff5a24, transparent: true, opacity: .08, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
-    group.add(shell, nose, trail, halo);
+    group.add(body, fireTrail, emberTrail, halo);
     group.position.set(x, y, -72);
-    this.scene.add(group); this.traces.push({ group, x, y });
+    const spin = new THREE.Vector3(
+      THREE.MathUtils.randFloat(.65, 1.2),
+      THREE.MathUtils.randFloat(.45, 1.05),
+      THREE.MathUtils.randFloat(-.7, .7),
+    );
+    this.scene.add(group); this.traces.push({ group, body, spin, x, y });
+  }
+
+  private createMeteorBody(): THREE.Group {
+    const body = new THREE.Group();
+    const geometry = new THREE.IcosahedronGeometry(.76, 2);
+    const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const vertex = new THREE.Vector3();
+    const seed = Math.random() * 100;
+    for (let index = 0; index < positions.count; index += 1) {
+      vertex.fromBufferAttribute(positions, index);
+      const noise = Math.sin(vertex.x * 17.17 + vertex.y * 31.73 + vertex.z * 47.11 + seed) * 43758.5453;
+      const scale = .82 + (noise - Math.floor(noise)) * .3;
+      vertex.normalize().multiplyScalar(.76 * scale);
+      positions.setXYZ(index, vertex.x, vertex.y * .92, vertex.z * 1.08);
+    }
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
+    const rock = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color: 0x443c39, roughness: .96, metalness: .04, flatShading: true }),
+    );
+    body.add(rock);
+
+    const craterMaterial = new THREE.MeshStandardMaterial({ color: 0x171516, roughness: 1, side: THREE.DoubleSide });
+    const rimMaterial = new THREE.MeshStandardMaterial({ color: 0x64544a, roughness: 1 });
+    const craters = [
+      { x: -.22, y: .18, radius: .17, z: .73 },
+      { x: .27, y: -.12, radius: .12, z: .76 },
+      { x: .08, y: .34, radius: .08, z: .72 },
+    ];
+    for (const crater of craters) {
+      const pit = new THREE.Mesh(new THREE.CircleGeometry(crater.radius, 12), craterMaterial.clone());
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(crater.radius, crater.radius * .18, 6, 12), rimMaterial.clone());
+      pit.position.set(crater.x, crater.y, crater.z);
+      rim.position.copy(pit.position); rim.position.z += .012;
+      body.add(pit, rim);
+    }
+    return body;
+  }
+
+  private createMeteorTrail(count: number, color: number, size: number, opacity: number): THREE.Points {
+    const positions = new Float32Array(count * 3);
+    for (let index = 0; index < count; index += 1) {
+      const distance = THREE.MathUtils.randFloat(.7, 5.2);
+      const spread = .08 + distance * .075;
+      positions[index * 3] = THREE.MathUtils.randFloatSpread(spread);
+      positions[index * 3 + 1] = THREE.MathUtils.randFloatSpread(spread);
+      positions[index * 3 + 2] = -distance;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    return new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({ color, size, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
   }
 
   private updatePlaying(delta: number): void {
@@ -316,7 +362,9 @@ export class TraceGame {
   private updateTraces(delta: number): void {
     for (let index = this.traces.length - 1; index >= 0; index -= 1) {
       const trace = this.traces[index]; trace.group.position.z += GAME_CONFIG.traceSpeed * delta;
-      trace.group.rotation.z += delta * .9;
+      trace.body.rotation.x += trace.spin.x * delta;
+      trace.body.rotation.y += trace.spin.y * delta;
+      trace.body.rotation.z += trace.spin.z * delta;
       if (trace.group.position.z > -.3) {
         if (Math.hypot(trace.x - this.shipRoot.position.x, trace.y - this.shipRoot.position.y) < 1.55) this.collideTrace(index);
         else if (trace.group.position.z > 7) this.removeTrace(index);
@@ -327,7 +375,7 @@ export class TraceGame {
   private cutTrace(index: number): void {
     const trace = this.traces[index]; this.createAfterimage(trace.x, trace.group.position.y, trace.group.position.z); this.removeTrace(index);
     this.state = registerCut(this.state); this.hitStop = GAME_CONFIG.hitStopDuration; this.setDepthVisuals(this.state.depth);
-    this.ui.status.textContent = '光弾を撃ち落とした。粒子が増える'; this.updateUi();
+    this.ui.status.textContent = '隕石を撃ち落とした。粒子が増える'; this.updateUi();
   }
 
   private collideTrace(index: number): void {
@@ -367,16 +415,24 @@ export class TraceGame {
     const count = 52;
     const positions = new Float32Array(count * 3);
     const velocities = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const color = new THREE.Color();
     for (let index = 0; index < count; index += 1) {
       const direction = new THREE.Vector3().randomDirection();
       const speed = THREE.MathUtils.randFloat(2.4, 8.5);
       velocities[index * 3] = direction.x * speed;
       velocities[index * 3 + 1] = direction.y * speed;
       velocities[index * 3 + 2] = direction.z * speed;
+      if (Math.random() < .42) color.setHSL(THREE.MathUtils.randFloat(.035, .1), .9, .62);
+      else color.setHSL(THREE.MathUtils.randFloat(.04, .08), .12, THREE.MathUtils.randFloat(.28, .55));
+      colors[index * 3] = color.r;
+      colors[index * 3 + 1] = color.g;
+      colors[index * 3 + 2] = color.b;
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({ color: 0xb7f5ff, size: .28, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const material = new THREE.PointsMaterial({ vertexColors: true, size: .3, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
     const points = new THREE.Points(geometry, material);
     points.position.set(x, y, z);
     this.scene.add(points);
