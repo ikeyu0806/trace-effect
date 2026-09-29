@@ -1,0 +1,73 @@
+@layer reset, base, components;
+
+@layer reset {
+  html,
+  body,
+  main,
+  canvas,
+  section,
+  p {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    color: #e8f5ff;
+    background: #030711;
+    font-synthesis: none;
+  }
+
+  html,
+  body,
+  #app {
+    inline-size: 100%;
+    block-size: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    min-block-size: 100dvb;
+  }
+
+  canvas {
+    display: block;
+    inline-size: 100%;
+    block-size: 100%;
+  }
+}
+
+@layer components {
+  .loading {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    gap: 0.5rem;
+    text-align: center;
+    letter-spacing: 0.08em;
+    background: radial-gradient(circle at 50% 45%, #0a1c35, #030711 58%);
+    transition: opacity 400ms ease;
+  }
+
+  .loading[hidden] {
+    display: none;
+  }
+
+  .eyebrow {
+    color: #7ee8ff;
+    font-size: clamp(1.4rem, 1rem + 1.5vi, 2.5rem);
+    font-weight: 600;
+    letter-spacing: 0.35em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading {
+    transition: none;
+  }
+}
