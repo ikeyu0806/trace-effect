@@ -8,6 +8,8 @@ export const GAME_CONFIG = {
   traceSpeed: 18,
   projectileSpeed: 72,
   meteorHitRadius: 1.35,
+  fireInterval: .15,
+  scatterSpread: .75,
   fieldWidth: 13,
   fieldMinY: -2.5,
   fieldMaxY: 2.7,

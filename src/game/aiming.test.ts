@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { calculateShotVelocity, segmentIntersectsSphere } from './aiming';
+import { calculateShotVelocity, createScatterTargets, segmentIntersectsSphere } from './aiming';
 
 describe('shot aiming', () => {
   it('moves a projectile through the visible aim point', () => {
@@ -27,5 +27,14 @@ describe('shot aiming', () => {
 
     expect(segmentIntersectsSphere(before, after, meteor, 1.2)).toBe(true);
     expect(segmentIntersectsSphere(before, after, meteor, .5)).toBe(false);
+  });
+
+  it('keeps one accurate center shot and adds four surrounding shots', () => {
+    const center = new THREE.Vector3(2, 3, -18);
+    const targets = createScatterTargets(center, .75);
+
+    expect(targets).toHaveLength(5);
+    expect(targets[0]).toEqual(center);
+    expect(targets.slice(1).map((target) => target.distanceTo(center))).toEqual([.75, .75, .75, .75]);
   });
 });

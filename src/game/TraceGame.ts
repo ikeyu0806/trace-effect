@@ -5,11 +5,11 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { GAME_CONFIG } from './config';
-import { calculateShotVelocity, segmentIntersectsSphere } from './aiming';
+import { calculateShotVelocity, createScatterTargets, segmentIntersectsSphere } from './aiming';
 import { advanceFlight, createGameState, registerCollision, registerCut } from './state';
 
 interface Trace { group: THREE.Group; body: THREE.Group; spin: THREE.Vector3; x: number; y: number }
-interface Projectile { mesh: THREE.Mesh; velocity: THREE.Vector3 }
+interface Projectile { mesh: THREE.Mesh; velocity: THREE.Vector3; volleyId: number }
 interface ParticleBurst { points: THREE.Points; velocities: Float32Array; age: number }
 
 interface UiElements {
@@ -41,8 +41,12 @@ export class TraceGame {
   private readonly particleBursts: ParticleBurst[] = [];
   private readonly targetStar = new THREE.Group();
   private state = createGameState();
-  private projectile: Projectile | null = null;
+  private readonly projectiles: Projectile[] = [];
   private spawnTimer = 0.35;
+  private fireCooldown = 0;
+  private nextVolleyId = 0;
+  private pointerFiring = false;
+  private spacePressed = false;
   private hitStop = 0;
   private approachTime = 0;
   private pointerX = 0;
@@ -158,6 +162,7 @@ export class TraceGame {
     window.addEventListener('resize', this.resize);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerdown', this.onPointerDown, { capture: true });
+    window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
@@ -171,9 +176,14 @@ export class TraceGame {
     this.targetY = THREE.MathUtils.lerp(GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY, (this.pointerY + 1) * .5);
   };
 
-  private readonly onPointerDown = (): void => {
+  private readonly onPointerDown = (event: PointerEvent): void => {
+    if (event.button !== 0) return;
     if (this.state.phase === 'ready') this.start();
-    else if (this.state.phase === 'playing') this.fire();
+    else if (this.state.phase === 'playing') { this.pointerFiring = true; this.fire(); }
+  };
+
+  private readonly onPointerUp = (event: PointerEvent): void => {
+    if (event.button === 0) this.pointerFiring = false;
   };
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'Escape' && (this.state.phase === 'playing' || this.state.phase === 'paused')) this.togglePause();
@@ -182,7 +192,11 @@ export class TraceGame {
     if (event.code === 'ArrowRight') { event.preventDefault(); this.rightPressed = true; }
     if (event.code === 'ArrowUp') { event.preventDefault(); this.upPressed = true; }
     if (event.code === 'ArrowDown') { event.preventDefault(); this.downPressed = true; }
-    if (event.code === 'Space') { event.preventDefault(); this.fire(); }
+    if (event.code === 'Space') {
+      event.preventDefault();
+      if (!this.spacePressed) this.fire();
+      this.spacePressed = true;
+    }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -190,6 +204,7 @@ export class TraceGame {
     if (event.code === 'ArrowRight') this.rightPressed = false;
     if (event.code === 'ArrowUp') this.upPressed = false;
     if (event.code === 'ArrowDown') this.downPressed = false;
+    if (event.code === 'Space') this.spacePressed = false;
   };
 
   private readonly onVisibilityChange = (): void => {
@@ -198,6 +213,8 @@ export class TraceGame {
     this.rightPressed = false;
     this.upPressed = false;
     this.downPressed = false;
+    this.pointerFiring = false;
+    this.spacePressed = false;
     this.togglePause();
   };
 
@@ -221,7 +238,8 @@ export class TraceGame {
   }
 
   private reset(): void {
-    this.state = createGameState(); this.spawnTimer = .35; this.hitStop = 0; this.approachTime = 0;
+    this.state = createGameState(); this.spawnTimer = .35; this.fireCooldown = 0; this.hitStop = 0; this.approachTime = 0;
+    this.nextVolleyId = 0; this.pointerFiring = false; this.spacePressed = false;
     this.pointerX = 0; this.pointerY = 0; this.targetX = 0; this.targetY = -1.65;
     this.leftPressed = false; this.rightPressed = false; this.upPressed = false; this.downPressed = false;
     this.shipRoot.position.set(0, -1.65, 0); this.shipRoot.rotation.set(.04, Math.PI, 0);
@@ -235,21 +253,33 @@ export class TraceGame {
   private togglePause(): void {
     const paused = this.state.phase === 'playing';
     this.state = { ...this.state, phase: paused ? 'paused' : 'playing' };
+    if (paused) { this.pointerFiring = false; this.spacePressed = false; }
     this.ui.pause.hidden = !paused;
     this.ui.status.textContent = paused ? '一時停止' : '飛行再開';
     this.clock.getDelta();
   }
 
   private fire(): void {
-    if (this.projectile) return;
-    const geometry = new THREE.CapsuleGeometry(.12, 1.15, 4, 8); geometry.rotateX(Math.PI / 2);
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xc9fbff }));
+    if (this.state.phase !== 'playing' || this.fireCooldown > 0) return;
     const start = new THREE.Vector3(this.shipRoot.position.x, this.shipRoot.position.y + 1.03, -3.1);
-    const velocity = calculateShotVelocity(start, this.reticle.position, GAME_CONFIG.projectileSpeed);
-    mesh.position.copy(start);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), velocity.clone().normalize());
-    this.scene.add(mesh);
-    this.projectile = { mesh, velocity };
+    const volleyId = this.nextVolleyId;
+    this.nextVolleyId += 1;
+    const targets = createScatterTargets(this.reticle.position, GAME_CONFIG.scatterSpread);
+    for (let index = 0; index < targets.length; index += 1) {
+      const isCenter = index === 0;
+      const geometry = new THREE.CapsuleGeometry(isCenter ? .12 : .075, isCenter ? 1.15 : .72, 4, 8);
+      geometry.rotateX(Math.PI / 2);
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({ color: isCenter ? 0xe4fdff : 0x65dfff, transparent: true, opacity: isCenter ? 1 : .72 }),
+      );
+      const velocity = calculateShotVelocity(start, targets[index], GAME_CONFIG.projectileSpeed);
+      mesh.position.copy(start);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), velocity.clone().normalize());
+      this.scene.add(mesh);
+      this.projectiles.push({ mesh, velocity, volleyId });
+    }
+    this.fireCooldown = GAME_CONFIG.fireInterval;
   }
 
   private spawnTrace(): void {
@@ -342,6 +372,8 @@ export class TraceGame {
       this.targetY = THREE.MathUtils.clamp(this.targetY + keyboardAxisY * GAME_CONFIG.keyboardMoveSpeedY * delta, GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY);
       this.pointerY = THREE.MathUtils.mapLinear(this.targetY, GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY, -1, 1);
     }
+    this.fireCooldown = Math.max(0, this.fireCooldown - delta);
+    if ((this.pointerFiring || this.spacePressed) && this.fireCooldown <= 0) this.fire();
     this.spawnTimer -= delta;
     if (this.spawnTimer <= 0 && this.traces.length < GAME_CONFIG.maxTraces) { this.spawnTrace(); this.spawnTimer = GAME_CONFIG.spawnInterval; }
     this.shipRoot.position.x = THREE.MathUtils.damp(this.shipRoot.position.x, this.targetX, 22, delta);
@@ -350,23 +382,24 @@ export class TraceGame {
     this.shipRoot.rotation.z = THREE.MathUtils.damp(this.shipRoot.rotation.z, -this.pointerX * .15, 10, delta);
     this.reticle.position.x = THREE.MathUtils.damp(this.reticle.position.x, this.targetX * 1.35, 22, delta);
     this.reticle.position.y = THREE.MathUtils.damp(this.reticle.position.y, this.targetY + 2.25, 22, delta);
-    this.updateProjectile(delta); this.updateTraces(delta); this.updateTravel(delta); this.updateUi();
+    this.updateProjectiles(delta); this.updateTraces(delta); this.updateTravel(delta); this.updateUi();
   }
 
-  private updateProjectile(delta: number): void {
-    if (!this.projectile) return;
-    const previousPosition = this.projectile.mesh.position.clone();
-    this.projectile.mesh.position.addScaledVector(this.projectile.velocity, delta);
-    const hitIndex = this.traces.findIndex((trace) =>
-      segmentIntersectsSphere(
-        previousPosition,
-        this.projectile!.mesh.position,
-        trace.group.position,
-        GAME_CONFIG.meteorHitRadius,
-      ),
-    );
-    if (hitIndex >= 0) { this.cutTrace(hitIndex); this.removeProjectile(); }
-    else if (this.projectile.mesh.position.z < -92) this.removeProjectile();
+  private updateProjectiles(delta: number): void {
+    for (let projectileIndex = this.projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
+      const projectile = this.projectiles[projectileIndex];
+      const previousPosition = projectile.mesh.position.clone();
+      projectile.mesh.position.addScaledVector(projectile.velocity, delta);
+      const hitIndex = this.traces.findIndex((trace) =>
+        segmentIntersectsSphere(previousPosition, projectile.mesh.position, trace.group.position, GAME_CONFIG.meteorHitRadius),
+      );
+      if (hitIndex >= 0) {
+        this.cutTrace(hitIndex);
+        this.removeVolley(projectile.volleyId);
+        return;
+      }
+      if (projectile.mesh.position.z < -92) this.removeProjectile(projectileIndex);
+    }
   }
 
   private updateTraces(delta: number): void {
@@ -492,6 +525,7 @@ export class TraceGame {
 
   private finish(completed: boolean): void {
     if (completed) this.state = { ...this.state, phase: 'complete' };
+    this.pointerFiring = false; this.spacePressed = false;
     this.ui.hud.hidden = true; this.ui.hud.classList.remove('is-approaching'); this.ui.end.hidden = false;
     this.ui.end.dataset.result = completed ? 'complete' : 'gameover';
     this.ui.endTitle.textContent = completed ? 'GAME CLEAR' : 'GAME OVER';
@@ -514,9 +548,20 @@ export class TraceGame {
     this.composer.render(); requestAnimationFrame(this.animate);
   };
 
-  private removeProjectile(): void { if (this.projectile) { this.disposeObject(this.projectile.mesh); this.projectile = null; } }
+  private removeProjectile(index: number): void {
+    const [projectile] = this.projectiles.splice(index, 1);
+    if (projectile) this.disposeObject(projectile.mesh);
+  }
+  private removeVolley(volleyId: number): void {
+    for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
+      if (this.projectiles[index].volleyId === volleyId) this.removeProjectile(index);
+    }
+  }
   private removeTrace(index: number): void { const [trace] = this.traces.splice(index, 1); if (trace) this.disposeObject(trace.group); }
-  private clearHazards(): void { while (this.traces.length) this.removeTrace(this.traces.length - 1); this.removeProjectile(); }
+  private clearHazards(): void {
+    while (this.traces.length) this.removeTrace(this.traces.length - 1);
+    while (this.projectiles.length) this.removeProjectile(this.projectiles.length - 1);
+  }
   private clearObjects(): void {
     this.clearHazards();
     while (this.afterimages.length) { const image = this.afterimages.pop(); if (image) this.disposeObject(image); }

@@ -6,6 +6,16 @@ export function calculateShotVelocity(start: THREE.Vector3, target: THREE.Vector
   return direction.normalize().multiplyScalar(speed);
 }
 
+export function createScatterTargets(center: THREE.Vector3, spread: number): THREE.Vector3[] {
+  return [
+    center.clone(),
+    center.clone().add(new THREE.Vector3(spread, 0, 0)),
+    center.clone().add(new THREE.Vector3(-spread, 0, 0)),
+    center.clone().add(new THREE.Vector3(0, spread, 0)),
+    center.clone().add(new THREE.Vector3(0, -spread, 0)),
+  ];
+}
+
 export function segmentIntersectsSphere(
   segmentStart: THREE.Vector3,
   segmentEnd: THREE.Vector3,
