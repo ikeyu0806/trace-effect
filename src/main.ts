@@ -17,7 +17,6 @@ const ui: UiElements = {
   pause: required('#pause'),
   end: required('#end'),
   endTitle: required('#end-title'),
-  endCopy: required('#end-copy'),
   restartButton: required('#restart-button'),
   status: required('#status'),
 };

@@ -20,7 +20,6 @@ interface UiElements {
   pause: HTMLElement;
   end: HTMLElement;
   endTitle: HTMLElement;
-  endCopy: HTMLElement;
   restartButton: HTMLButtonElement;
   status: HTMLElement;
 }
@@ -350,13 +349,8 @@ export class TraceGame {
     if (completed) this.state = { ...this.state, phase: 'complete' };
     this.ui.hud.hidden = true; this.ui.hud.classList.remove('is-approaching'); this.ui.end.hidden = false;
     this.ui.end.dataset.result = completed ? 'complete' : 'gameover';
-    this.ui.endTitle.textContent = completed ? '星に触れた' : '光が遠ざかる';
-    this.ui.endCopy.textContent = completed ? this.getCompletionCopy() : '目的の星を前に、航路が途切れた。';
+    this.ui.endTitle.textContent = completed ? 'GAME CLEAR' : 'GAME OVER';
     this.ui.restartButton.focus();
-  }
-
-  private getCompletionCopy(): string {
-    return ['静かな点のそばを通り過ぎた。','残した光が、星の輪郭を少し広げた。','重なった軌跡が、星を大きく照らした。','濃い星空が、最接近の光へ流れ込んだ。','断った光のすべてが、ひとつの星になった。'][this.state.depth];
   }
 
   private updateUi(): void {

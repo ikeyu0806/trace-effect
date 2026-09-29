@@ -58,9 +58,8 @@
 
   .eyebrow { color: var(--cyan); font-size: clamp(.72rem, .66rem + .22vi, .88rem); font-weight: 650; letter-spacing: .34em; }
   h1 { font-size: clamp(2.5rem, 1.3rem + 4.6vi, 6.2rem); font-weight: 300; line-height: .98; letter-spacing: -.055em; text-wrap: balance; text-shadow: 0 0 3rem rgb(73 204 255 / 22%); }
+  .game-title { color: var(--cyan); font-size: clamp(1rem, .8rem + .8vi, 1.5rem); font-weight: 650; letter-spacing: .38em; }
   h2 { margin-block: .45rem 1rem; font-size: clamp(2rem, 1.5rem + 2vi, 4rem); font-weight: 300; letter-spacing: -.04em; }
-  .lead { color: #b8c9d9; font-size: clamp(.86rem, .78rem + .3vi, 1.05rem); line-height: 1.8; letter-spacing: .06em; }
-  .key-hint { color: var(--muted); font-size: .67rem; letter-spacing: .12em; }
 
   .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
   .lives { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-start: clamp(1.3rem, 3vi, 2.8rem); display: flex; gap: .65rem; }
@@ -95,7 +94,6 @@
   .controls .mouse-control span { min-inline-size: auto; }
 
   .compact { background: rgb(2 5 13 / 68%); backdrop-filter: blur(.4rem); }
-  .compact p:last-child { color: var(--muted); font-size: .76rem; }
   .end { background: radial-gradient(circle at 50% 42%, rgb(22 58 82 / 12%), rgb(2 5 13 / 58%) 70%); backdrop-filter: blur(.15rem); }
   .end > div { display: grid; justify-items: center; gap: 1rem; }
   .end button { margin-block-start: .65rem; }
@@ -114,6 +112,6 @@
 }
 
 @media (pointer: coarse) { button { min-block-size: 3.5rem; min-inline-size: 11rem; } }
-@media (max-height: 600px) { .intro { padding-block-end: 1.5rem; } .intro-copy { gap: .7rem; } .key-hint { display: none; } .controls { gap: .25rem; padding-block: .5rem; } .mouse-control { display: none !important; } }
+@media (max-height: 600px) { .intro { padding-block-end: 1.5rem; } .intro-copy { gap: .7rem; } .controls { gap: .25rem; padding-block: .5rem; } .mouse-control { display: none !important; } }
 @media (prefers-reduced-motion: reduce) { button, .life, .progress i { transition: none; } body.is-hit .impact { animation: none; } }
 @media (forced-colors: active) { button, .life { border-color: ButtonText; } .progress, .progress i { background: CanvasText; } }
