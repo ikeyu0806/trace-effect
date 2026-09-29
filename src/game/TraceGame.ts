@@ -47,7 +47,7 @@ export class TraceGame {
   private pointerX = 0;
   private targetX = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly ui: UiElements) {
+  constructor(canvas: HTMLCanvasElement, private readonly ui: UiElements) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -171,7 +171,7 @@ export class TraceGame {
     this.ui.restartButton.addEventListener('click', (event) => { event.stopPropagation(); this.reset(); this.start(); });
     window.addEventListener('resize', this.resize);
     window.addEventListener('pointermove', this.onPointerMove);
-    this.canvas.addEventListener('pointerdown', this.onPointerDown);
+    window.addEventListener('pointerdown', this.onPointerDown, { capture: true });
     window.addEventListener('keydown', this.onKeyDown);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
@@ -182,7 +182,10 @@ export class TraceGame {
     this.targetX = this.pointerX * GAME_CONFIG.fieldWidth * 0.5;
   };
 
-  private readonly onPointerDown = (): void => { if (this.state.phase === 'playing') this.fire(); };
+  private readonly onPointerDown = (): void => {
+    if (this.state.phase === 'ready') this.start();
+    else if (this.state.phase === 'playing') this.fire();
+  };
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'Escape' && (this.state.phase === 'playing' || this.state.phase === 'paused')) this.togglePause();
     if (event.code === 'Space' && this.state.phase === 'playing') { event.preventDefault(); this.fire(); }
