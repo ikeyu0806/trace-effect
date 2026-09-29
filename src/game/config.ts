@@ -7,6 +7,7 @@ export const GAME_CONFIG = {
   hitStopDuration: 0.05,
   traceSpeed: 18,
   projectileSpeed: 72,
+  meteorHitRadius: 1.35,
   fieldWidth: 13,
   fieldMinY: -2.5,
   fieldMaxY: 2.7,

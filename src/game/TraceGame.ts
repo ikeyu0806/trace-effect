@@ -5,10 +5,11 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { GAME_CONFIG } from './config';
+import { calculateShotVelocity, segmentIntersectsSphere } from './aiming';
 import { advanceFlight, createGameState, registerCollision, registerCut } from './state';
 
 interface Trace { group: THREE.Group; body: THREE.Group; spin: THREE.Vector3; x: number; y: number }
-interface Projectile { mesh: THREE.Mesh; x: number; y: number }
+interface Projectile { mesh: THREE.Mesh; velocity: THREE.Vector3 }
 interface ParticleBurst { points: THREE.Points; velocities: Float32Array; age: number }
 
 interface UiElements {
@@ -241,10 +242,14 @@ export class TraceGame {
 
   private fire(): void {
     if (this.projectile) return;
-    const geometry = new THREE.CapsuleGeometry(.09, 1.15, 4, 8); geometry.rotateX(Math.PI / 2);
+    const geometry = new THREE.CapsuleGeometry(.12, 1.15, 4, 8); geometry.rotateX(Math.PI / 2);
     const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xc9fbff }));
-    mesh.position.set(this.shipRoot.position.x, this.shipRoot.position.y + 1.03, -3.1); this.scene.add(mesh);
-    this.projectile = { mesh, x: mesh.position.x, y: mesh.position.y };
+    const start = new THREE.Vector3(this.shipRoot.position.x, this.shipRoot.position.y + 1.03, -3.1);
+    const velocity = calculateShotVelocity(start, this.reticle.position, GAME_CONFIG.projectileSpeed);
+    mesh.position.copy(start);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), velocity.clone().normalize());
+    this.scene.add(mesh);
+    this.projectile = { mesh, velocity };
   }
 
   private spawnTrace(): void {
@@ -350,10 +355,15 @@ export class TraceGame {
 
   private updateProjectile(delta: number): void {
     if (!this.projectile) return;
-    this.projectile.mesh.position.z -= GAME_CONFIG.projectileSpeed * delta;
+    const previousPosition = this.projectile.mesh.position.clone();
+    this.projectile.mesh.position.addScaledVector(this.projectile.velocity, delta);
     const hitIndex = this.traces.findIndex((trace) =>
-      Math.hypot(trace.x - this.projectile!.x, trace.y - this.projectile!.y) < .9 &&
-      Math.abs(trace.group.position.z - this.projectile!.mesh.position.z) < 2.4,
+      segmentIntersectsSphere(
+        previousPosition,
+        this.projectile!.mesh.position,
+        trace.group.position,
+        GAME_CONFIG.meteorHitRadius,
+      ),
     );
     if (hitIndex >= 0) { this.cutTrace(hitIndex); this.removeProjectile(); }
     else if (this.projectile.mesh.position.z < -92) this.removeProjectile();
