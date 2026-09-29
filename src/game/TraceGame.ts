@@ -46,6 +46,8 @@ export class TraceGame {
   private approachTime = 0;
   private pointerX = 0;
   private targetX = 0;
+  private leftPressed = false;
+  private rightPressed = false;
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: UiElements) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -173,6 +175,7 @@ export class TraceGame {
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerdown', this.onPointerDown, { capture: true });
     window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
 
@@ -188,9 +191,23 @@ export class TraceGame {
   };
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'Escape' && (this.state.phase === 'playing' || this.state.phase === 'paused')) this.togglePause();
-    if (event.code === 'Space' && this.state.phase === 'playing') { event.preventDefault(); this.fire(); }
+    if (this.state.phase !== 'playing') return;
+    if (event.code === 'ArrowLeft') { event.preventDefault(); this.leftPressed = true; }
+    if (event.code === 'ArrowRight') { event.preventDefault(); this.rightPressed = true; }
+    if (event.code === 'Space') { event.preventDefault(); this.fire(); }
   };
-  private readonly onVisibilityChange = (): void => { if (document.hidden && this.state.phase === 'playing') this.togglePause(); };
+
+  private readonly onKeyUp = (event: KeyboardEvent): void => {
+    if (event.code === 'ArrowLeft') this.leftPressed = false;
+    if (event.code === 'ArrowRight') this.rightPressed = false;
+  };
+
+  private readonly onVisibilityChange = (): void => {
+    if (!document.hidden || this.state.phase !== 'playing') return;
+    this.leftPressed = false;
+    this.rightPressed = false;
+    this.togglePause();
+  };
 
   private readonly resize = (): void => {
     const width = window.innerWidth, height = window.innerHeight;
@@ -213,6 +230,8 @@ export class TraceGame {
 
   private reset(): void {
     this.state = createGameState(); this.spawnTimer = .35; this.hitStop = 0; this.approachTime = 0;
+    this.pointerX = 0; this.targetX = 0; this.leftPressed = false; this.rightPressed = false;
+    this.shipRoot.position.x = 0; this.shipRoot.rotation.z = 0; this.reticle.position.x = 0;
     this.clearObjects();
     this.targetStar.position.set(0, 4.5, -120); this.targetStar.scale.setScalar(1);
     this.ui.end.hidden = true; this.ui.pause.hidden = true; this.ui.status.textContent = '';
@@ -249,6 +268,12 @@ export class TraceGame {
   private updatePlaying(delta: number): void {
     this.state = advanceFlight(this.state, delta);
     if (this.state.phase === 'approach') { this.beginApproach(); return; }
+    const keyboardAxis = Number(this.rightPressed) - Number(this.leftPressed);
+    if (keyboardAxis !== 0) {
+      const limit = GAME_CONFIG.fieldWidth * .5;
+      this.targetX = THREE.MathUtils.clamp(this.targetX + keyboardAxis * GAME_CONFIG.keyboardMoveSpeed * delta, -limit, limit);
+      this.pointerX = this.targetX / limit;
+    }
     this.spawnTimer -= delta;
     if (this.spawnTimer <= 0 && this.traces.length < GAME_CONFIG.maxTraces) { this.spawnTrace(); this.spawnTimer = GAME_CONFIG.spawnInterval; }
     this.shipRoot.position.x = THREE.MathUtils.damp(this.shipRoot.position.x, this.targetX, 22, delta);

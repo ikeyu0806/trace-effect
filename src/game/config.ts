@@ -8,4 +8,5 @@ export const GAME_CONFIG = {
   traceSpeed: 18,
   projectileSpeed: 72,
   fieldWidth: 13,
+  keyboardMoveSpeed: 9,
 } as const;
