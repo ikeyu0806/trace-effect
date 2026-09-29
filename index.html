@@ -10,10 +10,36 @@
   <body>
     <main id="app">
       <canvas id="scene" aria-label="宇宙船が暗い星空を飛ぶゲーム画面"></canvas>
-      <section id="loading" class="loading" aria-live="polite">
-        <p class="eyebrow">TRACE EFFECT</p>
-        <p>機体を準備しています…</p>
+      <section id="loading" class="overlay loading" aria-live="polite">
+        <div><p class="eyebrow">TRACE EFFECT</p><p>機体を準備しています…</p></div>
       </section>
+      <section id="intro" class="overlay intro" hidden>
+        <div class="intro-copy">
+          <p class="eyebrow">TRACE EFFECT</p>
+          <h1>光を断ち、<br />星空に残す。</h1>
+          <p class="lead">マウスで機体を導き、クリックで一発。<br />90秒先の星へ。</p>
+          <button id="start-button" type="button">FLIGHT START</button>
+          <p class="key-hint"><kbd>ESC</kbd> PAUSE <span aria-hidden="true">·</span> <kbd>SPACE</kbd> FIRE</p>
+        </div>
+      </section>
+      <section id="hud" class="hud" hidden aria-label="飛行状況">
+        <div id="lives" class="lives" aria-label="残機 3"></div>
+        <div id="progress" class="progress" aria-label="目的の星までの進行度"><i></i></div>
+        <p class="destination">APPROACH / 01</p>
+      </section>
+      <section id="pause" class="overlay compact" hidden>
+        <div><p class="eyebrow">FLIGHT SUSPENDED</p><h2>一時停止</h2><p><kbd>ESC</kbd> で飛行へ戻る</p></div>
+      </section>
+      <section id="end" class="overlay end" hidden>
+        <div>
+          <p class="eyebrow">FLIGHT RECORD</p>
+          <h2 id="end-title"></h2>
+          <p id="end-copy" class="lead"></p>
+          <button id="restart-button" type="button">もう一度飛ぶ</button>
+        </div>
+      </section>
+      <p id="status" class="sr-only" aria-live="polite"></p>
+      <div class="impact" aria-hidden="true"></div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

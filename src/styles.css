@@ -1,16 +1,8 @@
-@layer reset, base, components;
+@layer reset, base, components, states;
 
 @layer reset {
-  html,
-  body,
-  main,
-  canvas,
-  section,
-  p {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
+  html, body, main, canvas, section, div, p, h1, h2, button { box-sizing: border-box; margin: 0; padding: 0; }
+  button { font: inherit; }
 }
 
 @layer base {
@@ -18,56 +10,87 @@
     color-scheme: dark;
     font-family: Inter, ui-sans-serif, system-ui, sans-serif;
     color: #e8f5ff;
-    background: #030711;
+    background: #02050d;
     font-synthesis: none;
+    --cyan: #7ee8ff;
+    --muted: #8ba2b8;
+    --line: rgb(126 232 255 / 32%);
   }
 
-  html,
-  body,
-  #app {
-    inline-size: 100%;
-    block-size: 100%;
-    overflow: hidden;
+  html, body, #app { inline-size: 100%; block-size: 100%; overflow: hidden; }
+  body { min-block-size: 100dvb; }
+  canvas { display: block; inline-size: 100%; block-size: 100%; cursor: crosshair; }
+  [hidden] { display: none !important; }
+
+  button {
+    min-block-size: 3rem;
+    padding: .8rem 1.7rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: #eaffff;
+    background: rgb(8 30 48 / 72%);
+    box-shadow: inset 0 0 1rem rgb(74 209 255 / 8%), 0 0 1.6rem rgb(55 198 255 / 8%);
+    letter-spacing: .14em;
+    cursor: pointer;
+    transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease;
   }
 
-  body {
-    min-block-size: 100dvb;
-  }
-
-  canvas {
-    display: block;
-    inline-size: 100%;
-    block-size: 100%;
-  }
+  button:hover { transform: translateY(-2px); border-color: rgb(126 232 255 / 72%); background: rgb(13 47 73 / 85%); }
+  button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+  kbd { padding: .18em .45em; border: 1px solid rgb(170 223 241 / 25%); border-radius: .25rem; color: #cbefff; background: rgb(8 22 37 / 70%); font: inherit; }
 }
 
 @layer components {
-  .loading {
+  .overlay {
     position: fixed;
     inset: 0;
+    z-index: 3;
     display: grid;
     place-content: center;
-    gap: 0.5rem;
+    padding: 2rem;
     text-align: center;
-    letter-spacing: 0.08em;
-    background: radial-gradient(circle at 50% 45%, #0a1c35, #030711 58%);
-    transition: opacity 400ms ease;
+    background: radial-gradient(circle at 50% 42%, rgb(10 34 58 / 38%), rgb(2 5 13 / 86%) 72%);
   }
 
-  .loading[hidden] {
-    display: none;
-  }
+  .loading { letter-spacing: .08em; background: radial-gradient(circle at 50% 45%, #0a1c35, #030711 58%); }
+  .intro { place-content: end center; padding-block-end: clamp(3rem, 9dvb, 7rem); background: linear-gradient(to top, rgb(2 5 13 / 88%), transparent 62%); }
+  .intro-copy { display: grid; justify-items: center; gap: 1.2rem; }
 
-  .eyebrow {
-    color: #7ee8ff;
-    font-size: clamp(1.4rem, 1rem + 1.5vi, 2.5rem);
-    font-weight: 600;
-    letter-spacing: 0.35em;
+  .eyebrow { color: var(--cyan); font-size: clamp(.72rem, .66rem + .22vi, .88rem); font-weight: 650; letter-spacing: .34em; }
+  h1 { font-size: clamp(2.5rem, 1.3rem + 4.6vi, 6.2rem); font-weight: 300; line-height: .98; letter-spacing: -.055em; text-wrap: balance; text-shadow: 0 0 3rem rgb(73 204 255 / 22%); }
+  h2 { margin-block: .45rem 1rem; font-size: clamp(2rem, 1.5rem + 2vi, 4rem); font-weight: 300; letter-spacing: -.04em; }
+  .lead { color: #b8c9d9; font-size: clamp(.86rem, .78rem + .3vi, 1.05rem); line-height: 1.8; letter-spacing: .06em; }
+  .key-hint { color: var(--muted); font-size: .67rem; letter-spacing: .12em; }
+
+  .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+  .lives { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-start: clamp(1.3rem, 3vi, 2.8rem); display: flex; gap: .65rem; }
+  .life { inline-size: .72rem; block-size: .72rem; border: 1px solid var(--cyan); transform: rotate(45deg); background: rgb(126 232 255 / 68%); box-shadow: 0 0 .75rem rgb(88 224 255 / 80%); transition: opacity 220ms ease, transform 220ms ease; }
+  .life.is-lost { opacity: .18; transform: rotate(45deg) scale(.62); background: transparent; box-shadow: none; }
+  .destination { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-end: clamp(1.3rem, 3vi, 2.8rem); color: var(--muted); font-size: .68rem; letter-spacing: .22em; }
+  .progress { --flight-progress: 0; position: absolute; inset-inline: clamp(1.3rem, 3vi, 2.8rem); inset-block-end: clamp(1.2rem, 3dvb, 2rem); block-size: 1px; background: rgb(126 232 255 / 16%); overflow: hidden; }
+  .progress i { display: block; inline-size: calc(var(--flight-progress) * 100%); block-size: 100%; background: var(--cyan); box-shadow: 0 0 1rem var(--cyan); transition: inline-size 100ms linear; }
+  .hud.is-approaching .destination { color: #eaffff; text-shadow: 0 0 1rem var(--cyan); }
+
+  .compact { background: rgb(2 5 13 / 68%); backdrop-filter: blur(.4rem); }
+  .compact p:last-child { color: var(--muted); font-size: .76rem; }
+  .end { background: radial-gradient(circle at 50% 42%, rgb(22 58 82 / 12%), rgb(2 5 13 / 58%) 70%); backdrop-filter: blur(.15rem); }
+  .end > div { display: grid; justify-items: center; gap: 1rem; }
+  .end button { margin-block-start: .65rem; }
+  .end[data-result='complete'] .eyebrow { color: #fff1bf; }
+
+  .impact { position: fixed; inset: 0; z-index: 4; pointer-events: none; border: 0 solid rgb(255 73 111 / 0%); opacity: 0; }
+  .sr-only { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+}
+
+@layer states {
+  body.is-hit .impact { animation: impact-flash 180ms ease-out; }
+  @keyframes impact-flash {
+    0% { opacity: 1; border-width: 1.2rem; border-color: rgb(255 73 111 / 72%); background: rgb(255 40 90 / 10%); }
+    100% { opacity: 0; border-width: 0; border-color: transparent; background: transparent; }
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .loading {
-    transition: none;
-  }
-}
+@media (pointer: coarse) { button { min-block-size: 3.5rem; min-inline-size: 11rem; } }
+@media (max-height: 600px) { .intro { padding-block-end: 1.5rem; } .intro-copy { gap: .7rem; } .key-hint { display: none; } }
+@media (prefers-reduced-motion: reduce) { button, .life, .progress i { transition: none; } body.is-hit .impact { animation: none; } }
+@media (forced-colors: active) { button, .life { border-color: ButtonText; } .progress, .progress i { background: CanvasText; } }
