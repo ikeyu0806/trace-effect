@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { JourneyLook } from '../journey';
 import { NOISE_GLSL } from './glsl';
 
 /**
@@ -64,6 +65,8 @@ void main() {
 /** 毎フレーム描く全天。焼いた低周波cubemapに、画素精度の星を重ねる。 */
 const SKY_FRAGMENT = /* glsl */ `
 uniform samplerCube skyDiffuse;
+uniform vec3 skyTint;
+uniform float nebulaLift;
 varying vec3 vWorldPosition;
 ${NOISE_GLSL}
 
@@ -91,10 +94,15 @@ void main() {
   vec3 galacticNormal = normalize(vec3(0.305, -0.873, 0.38));
   float latitude = dot(direction, galacticNormal);
   float band = exp(-latitude * latitude * 22.0);
-  vec3 color = textureCube(skyDiffuse, direction).rgb;
+  vec3 color = textureCube(skyDiffuse, direction).rgb * skyTint;
   color += starLayer(direction, 140.0, 0.08, 0.05, 1.6);
   color += starLayer(direction, 320.0, 0.22, 0.06, 0.9);
   color += starLayer(direction, 700.0, 0.35 + band * 0.4, 0.07, 0.5);
+  // Hubbleの散光星雲のように、進行区間でマゼンタ〜シアンの膜を重ねる。
+  float veil = pow(max(0.0, 0.35 + direction.y * 0.4), 1.4) * nebulaLift;
+  float wisps = fbm(direction * 3.2 + vec3(0.0, nebulaLift, 0.0), 3);
+  color += vec3(0.55, 0.12, 0.48) * veil * wisps * 0.55;
+  color += vec3(0.08, 0.32, 0.7) * veil * (1.0 - wisps) * 0.4;
   gl_FragColor = vec4(color, 1.0);
 }
 `;
@@ -336,6 +344,31 @@ void main() {
 }
 `;
 
+const NEBULA_VERTEX = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const NEBULA_FRAGMENT = /* glsl */ `
+uniform float time;
+uniform float opacity;
+uniform vec3 tint;
+varying vec2 vUv;
+${NOISE_GLSL}
+void main() {
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  float cloud = fbm(vec3(p * 2.4, time * 0.04), 4);
+  float tendril = fbm(vec3(p * 5.5 + cloud, time * 0.07), 3);
+  float mask = smoothstep(1.0, 0.15, r) * smoothstep(0.05, 0.45, cloud + tendril * 0.45);
+  vec3 color = mix(tint, tint * vec3(0.4, 0.7, 1.3), tendril);
+  gl_FragColor = vec4(color * mask * opacity * 1.4, 1.0);
+}
+`;
+
 const SUN_FRAGMENT = /* glsl */ `
 varying vec2 vUv;
 void main() {
@@ -367,6 +400,8 @@ export class SpaceBackdrop {
   private readonly icePlanet = new THREE.Group();
   private readonly moon: THREE.Mesh;
   private readonly sun: THREE.Mesh;
+  private readonly skyAurora: THREE.Mesh;
+  private readonly nebulaCards: THREE.Mesh[] = [];
   private readonly occluders: SphereOccluder[] = [];
   private readonly worldToLocalUniforms: { value: THREE.Matrix3; target: THREE.Object3D }[] = [];
 
@@ -378,7 +413,11 @@ export class SpaceBackdrop {
       new THREE.ShaderMaterial({
         vertexShader: SKY_VERTEX,
         fragmentShader: SKY_FRAGMENT,
-        uniforms: { skyDiffuse: { value: null } },
+        uniforms: {
+          skyDiffuse: { value: null },
+          skyTint: { value: new THREE.Color(1, 1, 1) },
+          nebulaLift: { value: 0 },
+        },
         side: THREE.BackSide,
         depthWrite: false,
       }),
@@ -398,7 +437,8 @@ export class SpaceBackdrop {
     this.createIcePlanet(sunUniform);
     this.moon = this.createMoon(sunUniform);
     this.sun = this.createSun();
-    this.createSkyAurora();
+    this.skyAurora = this.createSkyAurora();
+    this.createNebulaCards();
   }
 
   /** 全天の低周波成分を512角のHDR cubemapへ焼く。描画前に一度だけ呼ぶ。 */
@@ -523,7 +563,7 @@ export class SpaceBackdrop {
     );
   }
 
-  private createSkyAurora(): void {
+  private createSkyAurora(): THREE.Mesh {
     const radius = 1300;
     const arc = THREE.MathUtils.degToRad(110);
     // 画面に入る仰角-32度〜-2度の帯に、カメラを囲む円筒の一部として置く。
@@ -547,6 +587,38 @@ export class SpaceBackdrop {
     mesh.renderOrder = -90;
     mesh.frustumCulled = false;
     this.group.add(mesh);
+    return mesh;
+  }
+
+  private createNebulaCards(): void {
+    const cards = [
+      { position: [-70, 12, -95] as const, scale: [160, 70, 1] as const, rotation: [0.12, 0.4, 0.08] as const, tint: 0xaa40ff },
+      { position: [80, 6, -120] as const, scale: [140, 60, 1] as const, rotation: [-0.08, -0.35, -0.05] as const, tint: 0x2a88ff },
+      { position: [10, 28, -80] as const, scale: [180, 50, 1] as const, rotation: [0.35, 0.05, 0] as const, tint: 0xff5aa0 },
+    ];
+    for (const card of cards) {
+      const time = { value: 0 };
+      this.timeUniforms.push(time);
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.ShaderMaterial({
+          vertexShader: NEBULA_VERTEX,
+          fragmentShader: NEBULA_FRAGMENT,
+          uniforms: { time, opacity: { value: 0 }, tint: { value: new THREE.Color(card.tint) } },
+          transparent: true,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.position.set(card.position[0], card.position[1], card.position[2]);
+      mesh.scale.set(card.scale[0], card.scale[1], card.scale[2]);
+      mesh.rotation.set(card.rotation[0], card.rotation[1], card.rotation[2]);
+      mesh.renderOrder = -70;
+      mesh.visible = false;
+      this.group.add(mesh);
+      this.nebulaCards.push(mesh);
+    }
   }
 
   private createMoon(sunUniform: { value: THREE.Vector3 }): THREE.Mesh {
@@ -597,16 +669,28 @@ export class SpaceBackdrop {
     return this.sun.getWorldPosition(target);
   }
 
-  update(elapsed: number, flightProgress: number, camera: THREE.Camera): void {
+  update(elapsed: number, look: JourneyLook, camera: THREE.Camera): void {
     for (const uniform of this.timeUniforms) uniform.value = elapsed;
     this.sky.position.copy(camera.position);
     this.sun.lookAt(camera.position);
-    const drift = flightProgress;
-    this.gasGiant.position.set(-280 + drift * 40, -150 + drift * 20, -700 + drift * 120);
+    const skyMaterial = this.sky.material as THREE.ShaderMaterial;
+    (skyMaterial.uniforms.skyTint.value as THREE.Color).setHex(look.skyTint);
+    skyMaterial.uniforms.nebulaLift.value = look.nebula;
+    (this.skyAurora.material as THREE.ShaderMaterial).uniforms.intensity.value = look.skyAurora;
+    this.skyAurora.visible = look.skyAurora > 0.04;
+    this.gasGiant.position.set(look.gasGiant.x, look.gasGiant.y, look.gasGiant.z);
+    this.gasGiant.scale.setScalar(look.gasGiant.scale);
     this.gasGiant.rotation.y = 0.3 + elapsed * 0.004;
-    this.icePlanet.position.set(340 - drift * 30, -260 + drift * 25, -620 + drift * 90);
+    this.icePlanet.position.set(look.icePlanet.x, look.icePlanet.y, look.icePlanet.z);
+    this.icePlanet.scale.setScalar(look.icePlanet.scale);
     this.icePlanet.rotation.y = elapsed * 0.01;
-    this.moon.position.set(-120 + drift * 25, -40 + drift * 8, -520 + drift * 100);
+    this.moon.position.set(look.moon.x, look.moon.y, look.moon.z);
+    for (const card of this.nebulaCards) {
+      const material = card.material as THREE.ShaderMaterial;
+      material.uniforms.opacity.value = look.nebula;
+      card.visible = look.nebula > 0.04;
+      card.lookAt(camera.position);
+    }
     for (const uniform of this.worldToLocalUniforms) {
       uniform.target.updateMatrixWorld();
       uniform.value.setFromMatrix4(uniform.target.matrixWorld).invert();

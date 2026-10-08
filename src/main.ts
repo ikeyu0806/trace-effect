@@ -26,6 +26,7 @@ const ui: UiElements = {
   itemTags: required('#item-tags'),
   threatMarkers: required('#threat-markers'),
   progress: required('#progress'),
+  destination: required('#destination'),
   pause: required('#pause'),
   end: required('#end'),
   endTitle: required('#end-title'),

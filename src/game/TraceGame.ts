@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { loadGameAssets } from './assets';
 import { GAME_CONFIG, HAZARD_STATS, ITEM_PRESENTATION, type HazardKind, type ItemKind, WEAPON_IDS, type WeaponId } from './config';
+import { AltitudeCues, type AltitudeBody } from './fx/AltitudeCues';
 import { Explosions } from './fx/Explosions';
 import { HazardField, type Hazard } from './Hazards';
 import { ItemField } from './ItemField';
+import { sampleJourney, type JourneyLook } from './journey';
 import { chooseDrop } from './drops';
 import { GLOW_TEXTURE, PlayerShip } from './PlayerShip';
 import { PostProcessing } from './render/PostProcessing';
@@ -32,6 +34,7 @@ export interface UiElements {
   itemTags: HTMLElement;
   threatMarkers: HTMLElement;
   progress: HTMLElement;
+  destination: HTMLElement;
   pause: HTMLElement;
   end: HTMLElement;
   endTitle: HTMLElement;
@@ -50,9 +53,11 @@ interface World {
 }
 
 const SHIP_HOME = new THREE.Vector3(0, -1.65, 0);
-const CAMERA_HOME = new THREE.Vector3(0, 5.6, 12.5);
-const CAMERA_TARGET = new THREE.Vector3(0, -0.25, -13);
+// Star Fox / Ace Combatのように、やや高い位置から見下ろしてYとZを画面上で分ける。
+const CAMERA_HOME = new THREE.Vector3(0, 6.5, 13.2);
+const CAMERA_TARGET = new THREE.Vector3(0, -0.45, -14);
 const DUST_COUNT = 900;
+const FLASH_HIT = new THREE.Color(1.0, 0.72, 0.42);
 const MAX_PIXEL_RATIO = 1.5;
 const MIN_RENDER_SCALE = 0.55;
 
@@ -60,11 +65,17 @@ export class TraceGame {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly post: PostProcessing;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2600);
+  private readonly camera = new THREE.PerspectiveCamera(54, 1, 0.1, 2600);
   private readonly clock = new THREE.Clock();
   private readonly backdrop = new SpaceBackdrop();
   private readonly explosions = new Explosions();
+  private readonly altitude = new AltitudeCues(this.scene);
   private readonly threats: ThreatMarkers;
+  private readonly hemiLight = new THREE.HemisphereLight(0x8fb4ff, 0x120a14, 0.55);
+  private readonly sunLight = new THREE.DirectionalLight(0xffe2bc, 3.4);
+  private readonly keyLight = new THREE.DirectionalLight(0xd8e8ff, 2.3);
+  private readonly bounceLight = new THREE.DirectionalLight(0x4f8dff, 1.2);
+  private readonly fog: THREE.FogExp2;
   private readonly reticle = new THREE.Group();
   private readonly targetStar = new THREE.Group();
   private readonly dust: THREE.LineSegments;
@@ -102,6 +113,9 @@ export class TraceGame {
   private readonly sunScreen = new THREE.Vector2();
   private readonly scratch = new THREE.Vector3();
   private readonly aimPoint = new THREE.Vector3();
+  private cameraFollowX = 0;
+  private cameraFollowY = SHIP_HOME.y;
+  private journeyLabel = '';
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: UiElements) {
     this.threats = new ThreatMarkers(ui.threatMarkers);
@@ -110,7 +124,8 @@ export class TraceGame {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.scene.fog = new THREE.FogExp2(0x070c1c, 0.0052);
+    this.fog = new THREE.FogExp2(0x070c1c, 0.0052);
+    this.scene.fog = this.fog;
     this.camera.position.copy(CAMERA_HOME);
     this.camera.lookAt(CAMERA_TARGET);
 
@@ -135,19 +150,16 @@ export class TraceGame {
   }
 
   private buildLights(): void {
-    this.scene.add(new THREE.HemisphereLight(0x8fb4ff, 0x120a14, 0.55));
+    this.scene.add(this.hemiLight);
     // 画面奥の太陽から差す暖色のrim。手前から見ると機体と隕石の輪郭に光が回る。
-    const sunLight = new THREE.DirectionalLight(0xffe2bc, 3.4);
-    sunLight.position.copy(SUN_DIRECTION).multiplyScalar(60);
-    this.scene.add(sunLight);
+    this.sunLight.position.copy(SUN_DIRECTION).multiplyScalar(60);
+    this.scene.add(this.sunLight);
     // カメラ左上後方からのkey。形状の読みやすさを担う。
-    const key = new THREE.DirectionalLight(0xd8e8ff, 2.3);
-    key.position.set(-8, 12, 14);
-    this.scene.add(key);
+    this.keyLight.position.set(-8, 12, 14);
+    this.scene.add(this.keyLight);
     // 右下の氷惑星側から返る青い照り返し。
-    const bounce = new THREE.DirectionalLight(0x4f8dff, 1.2);
-    bounce.position.set(10, -6, -4);
-    this.scene.add(bounce);
+    this.bounceLight.position.set(10, -6, -4);
+    this.scene.add(this.bounceLight);
   }
 
   private createDust(): { dust: THREE.LineSegments; positions: Float32Array; colors: Float32Array } {
@@ -194,7 +206,7 @@ export class TraceGame {
       ticks.push(direction.clone().multiplyScalar(0.7), direction.clone().multiplyScalar(1.05));
     }
     this.reticle.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), material));
-    this.reticle.position.set(0, 0.6, -18);
+    this.reticle.position.set(0, -0.4, -20);
     this.reticle.visible = false;
     this.scene.add(this.reticle);
   }
@@ -213,6 +225,7 @@ export class TraceGame {
         items: new ItemField(assets.itemEmblems, this.scene, this.ui.itemTags),
         weapons: new WeaponSystem(this.scene, this.explosions, assets.missile, ship),
       };
+      this.altitude.fillScenery([...assets.asteroids, ...assets.debris]);
       await this.prewarm(assets);
       this.world = world;
       this.ui.loading.hidden = true;
@@ -479,8 +492,8 @@ export class TraceGame {
     this.shipVelocityX = THREE.MathUtils.damp(this.shipVelocityX, (root.position.x - previousX) / Math.max(delta, 1e-4), 12, delta);
     root.rotation.z = THREE.MathUtils.damp(root.rotation.z, THREE.MathUtils.clamp(this.shipVelocityX * 0.05, -0.75, 0.75), 8, delta);
     root.rotation.x = THREE.MathUtils.damp(root.rotation.x, 0.04 - (this.targetY - root.position.y) * 0.12, 8, delta);
-    this.reticle.position.x = THREE.MathUtils.damp(this.reticle.position.x, this.targetX * 1.35, 18, delta);
-    this.reticle.position.y = THREE.MathUtils.damp(this.reticle.position.y, this.targetY + 2.25, 18, delta);
+    this.reticle.position.x = THREE.MathUtils.damp(this.reticle.position.x, this.targetX * 1.25, 18, delta);
+    this.reticle.position.y = THREE.MathUtils.damp(this.reticle.position.y, this.targetY + 1.6, 18, delta);
   }
 
   private spawnHazards(delta: number, intensity: number, world: World): void {
@@ -545,9 +558,10 @@ export class TraceGame {
     world.hazards.spawn(kind, start, velocity);
   }
 
-  private readonly onHazardHit = (hazard: Hazard, damage: number): void => {
+  private readonly onHazardHit = (hazard: Hazard, damage: number, point: THREE.Vector3): void => {
     if (!this.world || hazard.hp <= 0) return;
     if (this.world.hazards.damage(hazard, damage)) this.destroyHazard(hazard, this.world, true);
+    else this.explosions.impact(point, FLASH_HIT, hazard.velocity, 0.55);
   };
 
   private destroyHazard(hazard: Hazard, world: World, scored: boolean): void {
@@ -747,27 +761,50 @@ export class TraceGame {
     ui.combo.textContent = `${state.combo} CHAIN  ×${multiplier.toFixed(1)}`;
   }
 
-  private updateDust(delta: number): void {
+  private applyJourney(look: JourneyLook): void {
+    this.fog.color.setHex(look.fogColor);
+    this.fog.density = look.fogDensity;
+    this.hemiLight.color.setHex(look.hemiSky);
+    this.hemiLight.groundColor.setHex(look.hemiGround);
+    this.hemiLight.intensity = look.hemiIntensity;
+    this.sunLight.color.setHex(look.sunColor);
+    this.sunLight.intensity = look.sunIntensity;
+    this.keyLight.color.setHex(look.keyColor);
+    this.keyLight.intensity = look.keyIntensity;
+    this.bounceLight.color.setHex(look.bounceColor);
+    this.bounceLight.intensity = look.bounceIntensity;
+    if (this.state.phase !== 'approach') this.renderer.toneMappingExposure = look.exposure;
+    if (look.destination !== this.journeyLabel) {
+      this.journeyLabel = look.destination;
+      this.ui.destination.textContent = look.destination;
+    }
+  }
+
+  private updateDust(delta: number, look: JourneyLook): void {
     const speed = this.worldSpeed * 1.6;
     const length = 0.4 + speed * 0.05;
     const brightness = 0.1 + this.state.depth * 0.07 + (this.state.overdrive > 0 ? 0.18 : 0);
     const positions = this.dustPositions;
     const colors = this.dustColors;
+    const [tr, tg, tb] = look.dustTint;
     for (let index = 0; index < DUST_COUNT; index += 1) {
       const i6 = index * 6;
       let z = positions[i6 + 2] + speed * delta;
       if (z > 14) {
         z -= 180;
         positions[i6] = positions[i6 + 3] = (Math.random() - 0.5) * 90;
-        positions[i6 + 1] = positions[i6 + 4] = (Math.random() - 0.35) * 46;
+        // 黄道面付近に塵を寄せ、高さが床からの距離として読めるようにする。
+        const onPlane = Math.random() < 0.55;
+        const y = onPlane ? -4.8 + Math.random() * 1.6 : (Math.random() - 0.35) * 46;
+        positions[i6 + 1] = positions[i6 + 4] = y;
       }
       positions[i6 + 2] = z;
       positions[i6 + 5] = z - length;
       const near = THREE.MathUtils.clamp((z + 160) / 170, 0, 1);
       const value = brightness * near * near;
-      colors[i6] = value * 0.75;
-      colors[i6 + 1] = value * 0.9;
-      colors[i6 + 2] = value * 1.1;
+      colors[i6] = value * tr;
+      colors[i6 + 1] = value * tg;
+      colors[i6 + 2] = value * tb;
       colors[i6 + 3] = colors[i6 + 4] = colors[i6 + 5] = 0;
     }
     this.dust.geometry.attributes.position.needsUpdate = true;
@@ -776,14 +813,21 @@ export class TraceGame {
 
   private updateCamera(delta: number, elapsed: number): void {
     const ship = this.world?.ship.root.position ?? SHIP_HOME;
+    this.cameraFollowX = THREE.MathUtils.damp(this.cameraFollowX, ship.x, 5, delta);
+    this.cameraFollowY = THREE.MathUtils.damp(this.cameraFollowY, ship.y, 5, delta);
     this.shake = Math.max(0, this.shake - delta * 2.2);
     const amount = this.shake * this.shake * 0.35;
+    const lift = this.cameraFollowY - SHIP_HOME.y;
     this.camera.position.set(
-      CAMERA_HOME.x + ship.x * 0.22 + (Math.random() - 0.5) * amount,
-      CAMERA_HOME.y + (ship.y - SHIP_HOME.y) * 0.18 + (Math.random() - 0.5) * amount,
+      CAMERA_HOME.x + this.cameraFollowX * 0.26 + (Math.random() - 0.5) * amount,
+      CAMERA_HOME.y + lift * 0.62 + (Math.random() - 0.5) * amount,
       CAMERA_HOME.z,
     );
-    this.scratch.set(CAMERA_TARGET.x + ship.x * 0.3, CAMERA_TARGET.y + (ship.y - SHIP_HOME.y) * 0.1, CAMERA_TARGET.z);
+    this.scratch.set(
+      CAMERA_TARGET.x + this.cameraFollowX * 0.34,
+      CAMERA_TARGET.y + lift * 0.72,
+      CAMERA_TARGET.z,
+    );
     this.camera.lookAt(this.scratch);
     this.camera.rotateZ(-(this.world?.ship.root.rotation.z ?? 0) * 0.06 + Math.sin(elapsed * 0.4) * 0.004);
   }
@@ -810,6 +854,8 @@ export class TraceGame {
     const world = this.world;
     const phase = this.state.phase;
     const paused = phase === 'paused';
+    const look = sampleJourney(phase === 'ready' ? 0 : flightIntensity(this.state.elapsed));
+    this.applyJourney(look);
     if (phase !== 'playing' && !paused) this.threats.clear();
     if (!paused) {
       if (world && phase === 'playing') this.updatePlaying(delta, elapsed, world);
@@ -841,10 +887,16 @@ export class TraceGame {
       this.targetStar.position.z = phase === 'approach' ? this.targetStar.position.z : THREE.MathUtils.lerp(-140, -70, flightIntensity(this.state.elapsed));
       if (phase !== 'approach') this.targetStar.scale.setScalar(THREE.MathUtils.lerp(1, 2.2, flightIntensity(this.state.elapsed)));
       this.explosions.update(delta, this.camera);
-      this.updateDust(delta);
+      this.updateDust(delta, look);
       this.updateCamera(rawDelta, elapsed);
+      if (world) {
+        const bodies: AltitudeBody[] = [{ position: world.ship.root.position, radius: GAME_CONFIG.shipHitRadius }];
+        for (const hazard of world.hazards.hazards) bodies.push({ position: hazard.position, radius: hazard.radius });
+        for (const item of world.items.items) bodies.push({ position: item.object.position, radius: 1.4 });
+        this.altitude.update(delta, elapsed, this.worldSpeed, look, bodies);
+      }
     }
-    this.backdrop.update(elapsed, flightIntensity(this.state.elapsed), this.camera);
+    this.backdrop.update(elapsed, look, this.camera);
     this.updatePost(elapsed, rawDelta);
     this.post.render();
     this.adaptResolution();

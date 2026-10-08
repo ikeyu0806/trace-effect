@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { boundingRadius, cloneWithMaterials, type GameAssets } from './assets';
 import { HAZARD_STATS, type HazardKind } from './config';
 import type { ExplosionStyle } from './fx/Explosions';
+import { maxPips, remainingPips } from './integrity';
 import { GLOW_TEXTURE } from './PlayerShip';
 
 interface FlashMaterial {
   material: THREE.MeshStandardMaterial;
+  baseColor: THREE.Color;
   baseEmissive: THREE.Color;
   baseIntensity: number;
 }
@@ -25,9 +27,14 @@ export interface Hazard {
   style: ExplosionStyle;
   materials: FlashMaterial[];
   marker: THREE.Sprite | null;
+  pips: THREE.Sprite[];
 }
 
 const FLASH_COLOR = new THREE.Color(1.0, 0.75, 0.55);
+const PIP_LIVE = new THREE.Color(1.0, 0.86, 0.45);
+const PIP_CRITICAL = new THREE.Color(1.0, 0.32, 0.22);
+const PIP_GONE = new THREE.Color(0.18, 0.16, 0.14);
+const DAMAGE_COLOR = new THREE.Color(0.28, 0.16, 0.1);
 
 /** 隕石、結晶隕石、デブリの生成・移動・被弾発光・破棄を扱う。 */
 export class HazardField {
@@ -62,8 +69,15 @@ export class HazardField {
     body.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       const material = child.material as THREE.MeshStandardMaterial;
-      materials.push({ material, baseEmissive: material.emissive.clone(), baseIntensity: material.emissiveIntensity });
+      materials.push({
+        material,
+        baseColor: material.color.clone(),
+        baseEmissive: material.emissive.clone(),
+        baseIntensity: material.emissiveIntensity,
+      });
     });
+    const pips = this.createPips(stats.hp, stats.radius);
+    for (const pip of pips) object.add(pip);
 
     let marker: THREE.Sprite | null = null;
     if (kind === 'crystal') {
@@ -97,10 +111,48 @@ export class HazardField {
       style: kind === 'crystal' ? 'crystal' : kind === 'debris' ? 'metal' : 'rock',
       materials,
       marker,
+      pips,
     };
     this.scene.add(object);
     this.hazards.push(hazard);
+    this.refreshPips(hazard);
     return hazard;
+  }
+
+  private createPips(maxHp: number, radius: number): THREE.Sprite[] {
+    const count = maxPips(maxHp);
+    const pips: THREE.Sprite[] = [];
+    const spacing = Math.min(0.38, (radius * 1.7) / Math.max(1, count - 1));
+    const y = radius + 0.55;
+    const map = GLOW_TEXTURE();
+    for (let index = 0; index < count; index += 1) {
+      const pip = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map,
+          color: PIP_LIVE,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.95,
+        }),
+      );
+      pip.position.set((index - (count - 1) * 0.5) * spacing, y, 0);
+      pip.scale.setScalar(0.42);
+      pips.push(pip);
+    }
+    return pips;
+  }
+
+  private refreshPips(hazard: Hazard): void {
+    const live = remainingPips(hazard.hp);
+    const critical = live <= 2 && hazard.maxHp > 2;
+    for (let index = 0; index < hazard.pips.length; index += 1) {
+      const pip = hazard.pips[index];
+      const filled = index < live;
+      pip.material.color.copy(filled ? (critical ? PIP_CRITICAL : PIP_LIVE) : PIP_GONE);
+      pip.material.opacity = filled ? (critical ? 1 : 0.95) : 0.18;
+      pip.material.blending = filled ? THREE.AdditiveBlending : THREE.NormalBlending;
+    }
   }
 
   /** 撃破されたらtrue。 */
@@ -108,6 +160,7 @@ export class HazardField {
     if (hazard.hp <= 0) return false;
     hazard.hp -= amount;
     hazard.flash = Math.min(1, hazard.flash + 0.6);
+    this.refreshPips(hazard);
     return hazard.hp <= 0;
   }
 
@@ -122,14 +175,18 @@ export class HazardField {
       // 遠方で急に現れないよう、出現直後は拡大しながらフェードインさせる。
       hazard.object.scale.setScalar(Math.min(1, 0.3 + hazard.age * 1.4));
       hazard.flash = Math.max(0, hazard.flash - delta * 10);
+      const broken = 1 - Math.max(0, hazard.hp) / hazard.maxHp;
       for (const entry of hazard.materials) {
-        entry.material.emissive.copy(entry.baseEmissive).multiplyScalar(entry.baseIntensity).lerp(FLASH_COLOR, hazard.flash * 0.35);
-        entry.material.emissiveIntensity = hazard.flash > 0 ? 1 + hazard.flash * 0.6 : 1;
-        if (hazard.flash === 0) {
+        entry.material.color.copy(entry.baseColor).lerp(DAMAGE_COLOR, broken * 0.72);
+        entry.material.emissive.copy(entry.baseEmissive).multiplyScalar(entry.baseIntensity).lerp(FLASH_COLOR, Math.max(hazard.flash * 0.35, broken * 0.22));
+        entry.material.emissiveIntensity = hazard.flash > 0 ? 1 + hazard.flash * 0.6 : entry.baseIntensity + broken * 0.45;
+        if (hazard.flash === 0 && broken === 0) {
           entry.material.emissive.copy(entry.baseEmissive);
           entry.material.emissiveIntensity = entry.baseIntensity;
         }
       }
+      const near = THREE.MathUtils.clamp((hazard.position.z + 110) / 90, 0.15, 1);
+      for (const pip of hazard.pips) pip.scale.setScalar(0.34 + near * 0.12);
       if (hazard.marker) hazard.marker.material.opacity = 0.35 + Math.sin(elapsed * 6 + hazard.id) * 0.15;
     }
   }
