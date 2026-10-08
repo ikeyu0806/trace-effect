@@ -80,6 +80,27 @@
   }
   .legend svg { inline-size: 1.1rem; block-size: 1.1rem; fill: currentColor; filter: drop-shadow(0 0 .25rem var(--item-color)); }
   .intro-note { color: var(--muted); font-size: .66rem; letter-spacing: .1em; }
+  .threat-markers { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
+  .threat-marker {
+    --size: 40px;
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    inline-size: var(--size);
+    block-size: var(--size);
+    border: 2px solid #ff4632;
+    border-radius: 3px;
+    filter: drop-shadow(0 0 .3rem rgb(255 60 40 / 85%));
+    /* 四隅だけを残して照準枠にする。 */
+    mask:
+      linear-gradient(#000 0 0) 0 0 / 30% 30% no-repeat,
+      linear-gradient(#000 0 0) 100% 0 / 30% 30% no-repeat,
+      linear-gradient(#000 0 0) 0 100% / 30% 30% no-repeat,
+      linear-gradient(#000 0 0) 100% 100% / 30% 30% no-repeat;
+    animation: threat-pulse .5s ease-in-out infinite alternate;
+    will-change: transform;
+  }
+  @keyframes threat-pulse { from { opacity: .55; } to { opacity: 1; } }
   .item-tags { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
   .item-tag {
     position: absolute;

@@ -8,6 +8,7 @@ import { chooseDrop } from './drops';
 import { GLOW_TEXTURE, PlayerShip } from './PlayerShip';
 import { PostProcessing } from './render/PostProcessing';
 import { SpaceBackdrop, SUN_DIRECTION } from './render/SpaceBackdrop';
+import { ThreatMarkers } from './ThreatMarkers';
 import { advanceFlight, collectItem, comboMultiplier, consumeNova, createGameState, flightIntensity, registerCut, resolveCollision, type GameState } from './state';
 import { WeaponSystem } from './WeaponSystem';
 
@@ -28,6 +29,7 @@ export interface UiElements {
   overdrive: HTMLElement;
   toast: HTMLElement;
   itemTags: HTMLElement;
+  threatMarkers: HTMLElement;
   progress: HTMLElement;
   pause: HTMLElement;
   end: HTMLElement;
@@ -60,6 +62,7 @@ export class TraceGame {
   private readonly clock = new THREE.Clock();
   private readonly backdrop = new SpaceBackdrop();
   private readonly explosions = new Explosions();
+  private readonly threats: ThreatMarkers;
   private readonly reticle = new THREE.Group();
   private readonly targetStar = new THREE.Group();
   private readonly dust: THREE.LineSegments;
@@ -99,6 +102,7 @@ export class TraceGame {
   private readonly aimPoint = new THREE.Vector3();
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: UiElements) {
+    this.threats = new ThreatMarkers(ui.threatMarkers);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -445,6 +449,7 @@ export class TraceGame {
     );
     this.cullHazards(world);
     const size = this.renderer.getSize(new THREE.Vector2());
+    this.threats.update(world.hazards.hazards, world.ship.root.position, GAME_CONFIG.shipHitRadius, this.camera, size.x, size.y);
     for (const kind of world.items.update(delta, world.ship.root.position, this.camera, size.x, size.y)) this.pickUp(kind, world);
     if (this.state.lives > previousLives && this.state.phase === 'playing') this.announceExtend(previousLives);
     this.updateHud(false);
@@ -799,6 +804,7 @@ export class TraceGame {
     const world = this.world;
     const phase = this.state.phase;
     const paused = phase === 'paused';
+    if (phase !== 'playing' && !paused) this.threats.clear();
     if (!paused) {
       if (world && phase === 'playing') this.updatePlaying(delta, elapsed, world);
       else if (world && phase === 'approach') this.updateApproach(delta, world);

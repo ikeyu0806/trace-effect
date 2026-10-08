@@ -24,6 +24,7 @@ const ui: UiElements = {
   overdrive: required('#overdrive'),
   toast: required('#toast'),
   itemTags: required('#item-tags'),
+  threatMarkers: required('#threat-markers'),
   progress: required('#progress'),
   pause: required('#pause'),
   end: required('#end'),
