@@ -6,17 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "test": "vitest run"
+    "preview": "npm run build && wrangler dev",
+    "test": "vitest run",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "three": "^0.180.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.63.0",
     "@gltf-transform/cli": "^4.5.1",
     "@types/three": "^0.180.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.7",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.2",
+    "wrangler": "^4.148.0"
   }
 }
