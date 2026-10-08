@@ -32,6 +32,7 @@ const ui: UiElements = {
   endScore: required('#end-score'),
   endKills: required('#end-kills'),
   restartButton: required('#restart-button'),
+  shareButton: required('#share-button'),
   status: required('#status'),
 };
 

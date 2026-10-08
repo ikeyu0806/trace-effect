@@ -9,6 +9,7 @@ import { GLOW_TEXTURE, PlayerShip } from './PlayerShip';
 import { PostProcessing } from './render/PostProcessing';
 import { SpaceBackdrop, SUN_DIRECTION } from './render/SpaceBackdrop';
 import { ThreatMarkers } from './ThreatMarkers';
+import { xShareUrl } from './share';
 import { advanceFlight, collectItem, comboMultiplier, consumeNova, createGameState, flightIntensity, registerCut, resolveCollision, type GameState } from './state';
 import { WeaponSystem } from './WeaponSystem';
 
@@ -37,6 +38,7 @@ export interface UiElements {
   endScore: HTMLElement;
   endKills: HTMLElement;
   restartButton: HTMLButtonElement;
+  shareButton: HTMLAnchorElement;
   status: HTMLElement;
 }
 
@@ -705,6 +707,10 @@ export class TraceGame {
     this.ui.endTitle.textContent = completed ? 'GAME CLEAR' : 'GAME OVER';
     this.ui.endScore.textContent = this.state.score.toLocaleString('en-US');
     this.ui.endKills.textContent = `${this.state.kills}`;
+    this.ui.shareButton.href = xShareUrl(
+      { score: this.state.score, kills: this.state.kills, completed },
+      `${window.location.origin}${window.location.pathname}`,
+    );
     this.ui.restartButton.focus();
   }
 

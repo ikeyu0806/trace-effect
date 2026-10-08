@@ -198,7 +198,24 @@
   .result div { display: grid; gap: .3rem; }
   .result dt { color: var(--muted); font-size: .6rem; letter-spacing: .26em; }
   .result dd { margin: 0; font-size: 1.5rem; font-weight: 300; letter-spacing: .1em; font-variant-numeric: tabular-nums; }
-  .end button { margin-block-start: .65rem; }
+  .end-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .8rem; margin-block-start: .65rem; }
+  .share-button {
+    display: inline-flex;
+    align-items: center;
+    gap: .55rem;
+    min-block-size: 3rem;
+    padding: .8rem 1.5rem;
+    border: 1px solid rgb(255 255 255 / 28%);
+    border-radius: 999px;
+    color: #fff;
+    background: rgb(0 0 0 / 72%);
+    letter-spacing: .1em;
+    text-decoration: none;
+    transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+  }
+  .share-button:hover { transform: translateY(-2px); border-color: rgb(255 255 255 / 70%); background: rgb(20 20 20 / 90%); }
+  .share-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+  .share-button svg { inline-size: 1rem; block-size: 1rem; fill: currentColor; }
   .end[data-result='complete'] .eyebrow { color: #fff1bf; }
 
   .impact { position: fixed; inset: 0; z-index: 4; pointer-events: none; border: 0 solid rgb(255 73 111 / 0%); opacity: 0; }
