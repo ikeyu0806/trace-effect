@@ -70,6 +70,7 @@ export class TraceGame {
 
   private spawnTimer = 1.2;
   private crystalTimer: number = GAME_CONFIG.crystalInterval * 0.6;
+  private itemTimer: number = GAME_CONFIG.firstItemDelay;
   private hitStop = 0;
   private approachTime = 0;
   private endDelay = 0;
@@ -203,7 +204,7 @@ export class TraceGame {
       const world: World = {
         ship,
         hazards: new HazardField(assets, this.scene),
-        items: new ItemField(assets.itemCapsule, this.scene, this.ui.itemTags),
+        items: new ItemField(assets.itemEmblems, this.scene, this.ui.itemTags),
         weapons: new WeaponSystem(this.scene, this.explosions, assets.missile, ship),
       };
       await this.prewarm(assets);
@@ -221,7 +222,7 @@ export class TraceGame {
   private async prewarm(assets: Awaited<ReturnType<typeof loadGameAssets>>): Promise<void> {
     const staging = new THREE.Group();
     staging.position.set(0, 0, -40);
-    for (const template of [...assets.asteroids, assets.crystalAsteroid, ...assets.debris, assets.itemCapsule, assets.missile]) {
+    for (const template of [...assets.asteroids, assets.crystalAsteroid, ...assets.debris, ...Object.values(assets.itemEmblems), assets.missile]) {
       staging.add(template.clone(true));
     }
     this.scene.add(staging);
@@ -358,6 +359,7 @@ export class TraceGame {
     this.state = createGameState();
     this.spawnTimer = 1.2;
     this.crystalTimer = GAME_CONFIG.crystalInterval * 0.6;
+    this.itemTimer = GAME_CONFIG.firstItemDelay;
     this.hitStop = 0;
     this.approachTime = 0;
     this.endDelay = 0;
@@ -482,19 +484,40 @@ export class TraceGame {
       const debrisShare = 0.2 + intensity * 0.15;
       const kind: HazardKind =
         roll < debrisShare ? 'debris' : roll < debrisShare + 0.16 ? 'asteroidLarge' : roll < debrisShare + 0.5 ? 'asteroidMedium' : 'asteroidSmall';
-      const drop = kind === 'debris' && Math.random() < GAME_CONFIG.debrisItemChance ? chooseDrop(this.state, Math.random()) : null;
-      this.spawnHazard(kind, drop, world);
+      this.spawnHazard(kind, world);
       const interval = THREE.MathUtils.lerp(GAME_CONFIG.spawnIntervalStart, GAME_CONFIG.spawnIntervalEnd, intensity);
       this.spawnTimer = interval * (0.65 + Math.random() * 0.7);
     }
     this.crystalTimer -= delta;
     if (this.crystalTimer <= 0) {
-      this.spawnHazard('crystal', chooseDrop(this.state, Math.random()), world);
+      this.spawnHazard('crystal', world);
       this.crystalTimer = GAME_CONFIG.crystalInterval * (0.8 + Math.random() * 0.4);
+    }
+    this.itemTimer -= delta;
+    if (this.itemTimer <= 0) {
+      this.spawnItem(world);
+      this.itemTimer = GAME_CONFIG.itemInterval * (0.8 + Math.random() * 0.4);
     }
   }
 
-  private spawnHazard(kind: HazardKind, drop: ItemKind | null, world: World): void {
+  /** アイテムは隕石より遅く、自機が届く範囲を通るように流す。 */
+  private spawnItem(world: World): void {
+    const halfWidth = GAME_CONFIG.fieldWidth * 0.42;
+    const start = new THREE.Vector3(
+      THREE.MathUtils.randFloat(-halfWidth, halfWidth),
+      THREE.MathUtils.randFloat(GAME_CONFIG.fieldMinY + 0.5, GAME_CONFIG.fieldMaxY + 1),
+      GAME_CONFIG.itemSpawnZ,
+    );
+    const target = new THREE.Vector3(
+      start.x * 0.7 + THREE.MathUtils.randFloatSpread(2),
+      THREE.MathUtils.randFloat(GAME_CONFIG.fieldMinY + 0.3, GAME_CONFIG.fieldMaxY - 0.3),
+      SHIP_HOME.z,
+    );
+    const velocity = target.sub(start).normalize().multiplyScalar(this.worldSpeed * GAME_CONFIG.itemSpeedRatio);
+    world.items.spawn(chooseDrop(this.state, Math.random()), start, velocity);
+  }
+
+  private spawnHazard(kind: HazardKind, world: World): void {
     const halfWidth = GAME_CONFIG.fieldWidth * 0.62;
     const start = new THREE.Vector3(
       THREE.MathUtils.randFloat(-halfWidth, halfWidth),
@@ -512,7 +535,7 @@ export class TraceGame {
         );
     const speedScale = kind === 'asteroidSmall' ? 1.15 : kind === 'asteroidLarge' ? 0.82 : kind === 'debris' ? 0.95 : 1;
     const velocity = target.sub(start).normalize().multiplyScalar(this.worldSpeed * speedScale);
-    world.hazards.spawn(kind, start, velocity, drop);
+    world.hazards.spawn(kind, start, velocity);
   }
 
   private readonly onHazardHit = (hazard: Hazard, damage: number): void => {
@@ -536,7 +559,6 @@ export class TraceGame {
           world.hazards.spawn(split, hazard.position.clone().add(offset), velocity).age = 1;
         }
       }
-      if (hazard.drop) world.items.spawn(hazard.drop, hazard.position, hazard.velocity);
     }
     world.hazards.remove(hazard);
   }

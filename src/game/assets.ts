@@ -1,15 +1,29 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { ITEM_KINDS, type ItemKind } from './config';
 
 export interface GameAssets {
   ship: THREE.Object3D;
   asteroids: THREE.Object3D[];
   crystalAsteroid: THREE.Object3D;
   debris: THREE.Object3D[];
-  itemCapsule: THREE.Object3D;
+  itemEmblems: Record<ItemKind, THREE.Object3D>;
   missile: THREE.Object3D;
 }
+
+/** アイテム種別ごとのemblem model（blender-works trace_pickups）。 */
+const EMBLEM_NODES: Record<ItemKind, string> = {
+  spread: 'EmblemSpread',
+  homing: 'EmblemHoming',
+  laser: 'EmblemLaser',
+  wave: 'EmblemWave',
+  chain: 'EmblemThunder',
+  shield: 'EmblemShield',
+  life: 'EmblemLife',
+  nova: 'EmblemNova',
+  overdrive: 'EmblemOverdrive',
+};
 
 /** GLTFLoaderはnode名から「.」などを除くため、比較は英数字だけで行う。 */
 export function normalizeName(name: string): string {
@@ -78,9 +92,11 @@ export async function loadGameAssets(onProgress: (ratio: number) => void): Promi
   const debris = ['Satellite', 'FuelTank', 'Truss', 'HullPlate', 'SolarFragment', 'RocketStage'].map((piece) =>
     detachTemplate(requireNode(debrisGltf.scene, `SpaceDebris.${piece}`)),
   );
-  const itemCapsule = detachTemplate(requireNode(pickupGltf.scene, 'Pickups.ItemCapsule'));
+  const itemEmblems = Object.fromEntries(
+    ITEM_KINDS.map((kind) => [kind, detachTemplate(requireNode(pickupGltf.scene, `Pickups.${EMBLEM_NODES[kind]}`))]),
+  ) as Record<ItemKind, THREE.Object3D>;
   const missile = detachTemplate(requireNode(pickupGltf.scene, 'Pickups.HomingMissile'));
-  return { ship, asteroids, crystalAsteroid, debris, itemCapsule, missile };
+  return { ship, asteroids, crystalAsteroid, debris, itemEmblems, missile };
 }
 
 /** templateを複製し、点滅などで個別に変えるためMaterialも複製する。 */

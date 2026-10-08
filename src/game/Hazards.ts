@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { boundingRadius, cloneWithMaterials, type GameAssets } from './assets';
-import { HAZARD_STATS, type HazardKind, type ItemKind } from './config';
+import { HAZARD_STATS, type HazardKind } from './config';
 import type { ExplosionStyle } from './fx/Explosions';
 import { GLOW_TEXTURE } from './PlayerShip';
 
@@ -23,7 +23,6 @@ export interface Hazard {
   flash: number;
   age: number;
   style: ExplosionStyle;
-  drop: ItemKind | null;
   materials: FlashMaterial[];
   marker: THREE.Sprite | null;
 }
@@ -42,7 +41,7 @@ export class HazardField {
     }
   }
 
-  spawn(kind: HazardKind, position: THREE.Vector3, velocity: THREE.Vector3, drop: ItemKind | null = null): Hazard {
+  spawn(kind: HazardKind, position: THREE.Vector3, velocity: THREE.Vector3): Hazard {
     const stats = HAZARD_STATS[kind];
     const template =
       kind === 'crystal'
@@ -67,11 +66,11 @@ export class HazardField {
     });
 
     let marker: THREE.Sprite | null = null;
-    if (kind === 'crystal' || drop) {
+    if (kind === 'crystal') {
       marker = new THREE.Sprite(
         new THREE.SpriteMaterial({
           map: GLOW_TEXTURE(),
-          color: kind === 'crystal' ? 0x47c8ff : 0xffb347,
+          color: 0x47c8ff,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
           transparent: true,
@@ -96,7 +95,6 @@ export class HazardField {
       flash: 0,
       age: 0,
       style: kind === 'crystal' ? 'crystal' : kind === 'debris' ? 'metal' : 'rock',
-      drop,
       materials,
       marker,
     };

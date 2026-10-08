@@ -67,23 +67,36 @@
 
   .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .45rem .9rem; max-inline-size: 38rem; padding: 0; margin: 0; list-style: none; color: #a9bed0; font-size: .64rem; letter-spacing: .14em; }
   .legend li { display: flex; align-items: center; gap: .4rem; }
-  .legend b, .item-tag {
+  .legend b {
     display: grid;
     place-items: center;
-    inline-size: 1.35rem;
-    block-size: 1.35rem;
+    inline-size: 1.6rem;
+    block-size: 1.6rem;
     border: 1px solid var(--item-color);
     border-radius: .3rem;
-    color: #fff;
-    background: color-mix(in srgb, var(--item-color) 28%, transparent);
-    box-shadow: 0 0 .8rem color-mix(in srgb, var(--item-color) 70%, transparent);
-    font-size: .72rem;
-    font-weight: 700;
-    letter-spacing: 0;
+    color: var(--item-color);
+    background: color-mix(in srgb, var(--item-color) 16%, rgb(2 5 13 / 80%));
+    box-shadow: 0 0 .8rem color-mix(in srgb, var(--item-color) 55%, transparent);
   }
+  .legend svg { inline-size: 1.1rem; block-size: 1.1rem; fill: currentColor; filter: drop-shadow(0 0 .25rem var(--item-color)); }
   .intro-note { color: var(--muted); font-size: .66rem; letter-spacing: .1em; }
   .item-tags { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
-  .item-tag { position: absolute; inset-block-start: 0; inset-inline-start: 0; will-change: transform; text-shadow: 0 0 .4rem var(--item-color); }
+  .item-tag {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    padding: .1rem .45rem;
+    border: 1px solid var(--item-color);
+    border-radius: 999px;
+    color: #fff;
+    background: color-mix(in srgb, var(--item-color) 30%, rgb(2 5 13 / 70%));
+    box-shadow: 0 0 .7rem color-mix(in srgb, var(--item-color) 60%, transparent);
+    font-size: .6rem;
+    font-weight: 700;
+    letter-spacing: .14em;
+    white-space: nowrap;
+    will-change: transform;
+  }
 
   .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; font-variant-numeric: tabular-nums; }
   .hud-status { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-start: clamp(1.3rem, 3vi, 2.8rem); display: grid; gap: .6rem; }
