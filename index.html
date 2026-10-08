@@ -4,31 +4,66 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#030711" />
-    <meta name="description" content="光を断ち、星空に軌跡を残す90秒のフライト。" />
+    <meta name="description" content="土星とオーロラの宙域を抜け、隕石とデブリを撃ち抜く90秒のフライトシューター。" />
     <title>TraceEffect</title>
   </head>
   <body>
     <main id="app">
-      <canvas id="scene" aria-label="宇宙船が暗い星空を飛ぶゲーム画面"></canvas>
+      <canvas id="scene" aria-label="宇宙船が惑星とオーロラの見える宙域を飛ぶゲーム画面"></canvas>
+      <div id="item-tags" class="item-tags" aria-hidden="true"></div>
       <section id="loading" class="overlay loading" aria-live="polite">
-        <div><p class="eyebrow">TRACE EFFECT</p></div>
+        <div class="loading-copy">
+          <p class="eyebrow">TRACE EFFECT</p>
+          <div class="loading-bar"><i id="loading-progress"></i></div>
+        </div>
       </section>
       <section id="intro" class="overlay intro" hidden>
         <div class="intro-copy">
           <h1 class="game-title">TRACE EFFECT</h1>
+          <ul class="legend" aria-label="アイテム">
+            <li style="--item-color: #5fe8ff"><b>S</b>SPREAD</li>
+            <li style="--item-color: #ff8a2a"><b>H</b>HOMING</li>
+            <li style="--item-color: #ff3fd2"><b>L</b>LASER</li>
+            <li style="--item-color: #4dffa0"><b>W</b>WAVE</li>
+            <li style="--item-color: #ffe14a"><b>T</b>THUNDER</li>
+            <li style="--item-color: #4f8dff"><b>◇</b>SHIELD</li>
+            <li style="--item-color: #b6ffcf"><b>+</b>1UP</li>
+            <li style="--item-color: #ff3a3a"><b>N</b>NOVA</li>
+            <li style="--item-color: #ffc24a"><b>O</b>OVERDRIVE</li>
+          </ul>
+          <p class="intro-note">同じ武器を重ねるとLV3まで強化。被弾でLVが1つ下がる。</p>
           <button id="start-button" type="button">GAME START</button>
         </div>
       </section>
       <section id="hud" class="hud" hidden aria-label="飛行状況">
-        <div id="lives" class="lives" aria-label="残機 3"></div>
-        <div id="progress" class="progress" aria-label="目的の星までの進行度"><i></i></div>
+        <div class="hud-status">
+          <div id="lives" class="lives" aria-label="残機 3"></div>
+          <div class="hud-row">
+            <span id="shield" class="shield-badge" hidden>SHIELD</span>
+            <span class="nova-label">NOVA</span>
+            <span id="nova" class="nova" aria-label="NOVA 1"></span>
+          </div>
+        </div>
+        <div class="hud-score">
+          <p id="score" class="score">0</p>
+          <p id="combo" class="combo" hidden></p>
+        </div>
         <p class="destination">APPROACH / 01</p>
+        <div id="weapon" class="weapon" style="--item-color: #5fe8ff">
+          <p class="weapon-label">WEAPON</p>
+          <p id="weapon-name" class="weapon-name">SPREAD</p>
+          <p id="weapon-level" class="weapon-level" aria-label="LV 1"></p>
+          <div id="overdrive" class="overdrive" hidden><i></i><span>OVERDRIVE</span></div>
+        </div>
+        <p id="toast" class="toast" aria-live="polite"></p>
+        <div id="progress" class="progress" aria-label="目的の星までの進行度"><i></i></div>
         <aside class="controls" aria-label="操作方法">
           <p class="controls-title">CONTROLS</p>
           <p><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd><span>移動</span></p>
-          <p><kbd>SPACE</kbd><span>連射</span></p>
+          <p><kbd>SPACE</kbd><span>射撃</span></p>
+          <p><kbd>B</kbd><kbd>SHIFT</kbd><span>NOVA</span></p>
           <p><kbd>ESC</kbd><span>停止</span></p>
-          <p class="mouse-control"><span>マウス ＋ 長押しにも対応</span></p>
+          <p class="mouse-control"><span>マウス移動 ＋ 左長押しで射撃 / 右クリックでNOVA</span></p>
         </aside>
       </section>
       <section id="pause" class="overlay compact" hidden>
@@ -37,6 +72,10 @@
       <section id="end" class="overlay end" hidden>
         <div>
           <h2 id="end-title"></h2>
+          <dl class="result">
+            <div><dt>SCORE</dt><dd id="end-score">0</dd></div>
+            <div><dt>DESTROYED</dt><dd id="end-kills">0</dd></div>
+          </dl>
           <button id="restart-button" type="button">RETRY</button>
         </div>
       </section>

@@ -1,7 +1,7 @@
 @layer reset, base, components, states;
 
 @layer reset {
-  html, body, main, canvas, section, div, p, h1, h2, button, footer { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, main, canvas, section, div, p, h1, h2, button, footer, ul, dl, dd { box-sizing: border-box; margin: 0; padding: 0; }
   button { font: inherit; }
 }
 
@@ -61,10 +61,74 @@
   .game-title { color: var(--cyan); font-size: clamp(1rem, .8rem + .8vi, 1.5rem); font-weight: 650; letter-spacing: .38em; }
   h2 { margin-block: .45rem 1rem; font-size: clamp(2rem, 1.5rem + 2vi, 4rem); font-weight: 300; letter-spacing: -.04em; }
 
-  .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
-  .lives { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-start: clamp(1.3rem, 3vi, 2.8rem); display: flex; gap: .65rem; }
-  .life { inline-size: .72rem; block-size: .72rem; border: 1px solid var(--cyan); transform: rotate(45deg); background: rgb(126 232 255 / 68%); box-shadow: 0 0 .75rem rgb(88 224 255 / 80%); transition: opacity 220ms ease, transform 220ms ease; }
-  .life.is-lost { opacity: .18; transform: rotate(45deg) scale(.62); background: transparent; box-shadow: none; }
+  .loading-copy { display: grid; justify-items: center; gap: 1rem; }
+  .loading-bar { inline-size: min(14rem, 60vi); block-size: 1px; background: rgb(126 232 255 / 16%); }
+  .loading-bar i { display: block; inline-size: calc(var(--loaded, 0) * 100%); block-size: 100%; background: var(--cyan); box-shadow: 0 0 .8rem var(--cyan); transition: inline-size 200ms ease; }
+
+  .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .45rem .9rem; max-inline-size: 38rem; padding: 0; margin: 0; list-style: none; color: #a9bed0; font-size: .64rem; letter-spacing: .14em; }
+  .legend li { display: flex; align-items: center; gap: .4rem; }
+  .legend b, .item-tag {
+    display: grid;
+    place-items: center;
+    inline-size: 1.35rem;
+    block-size: 1.35rem;
+    border: 1px solid var(--item-color);
+    border-radius: .3rem;
+    color: #fff;
+    background: color-mix(in srgb, var(--item-color) 28%, transparent);
+    box-shadow: 0 0 .8rem color-mix(in srgb, var(--item-color) 70%, transparent);
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+  .intro-note { color: var(--muted); font-size: .66rem; letter-spacing: .1em; }
+  .item-tags { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
+  .item-tag { position: absolute; inset-block-start: 0; inset-inline-start: 0; will-change: transform; text-shadow: 0 0 .4rem var(--item-color); }
+
+  .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; font-variant-numeric: tabular-nums; }
+  .hud-status { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-start: clamp(1.3rem, 3vi, 2.8rem); display: grid; gap: .6rem; }
+  .hud-row { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .6rem; letter-spacing: .2em; }
+  .lives { display: flex; gap: .5rem; }
+  .life {
+    inline-size: 1.1rem;
+    block-size: 1.2rem;
+    background: linear-gradient(to bottom, #f4fbff, #8fd8ff);
+    clip-path: polygon(50% 0, 62% 38%, 100% 74%, 100% 86%, 60% 78%, 56% 100%, 44% 100%, 40% 78%, 0 86%, 0 74%, 38% 38%);
+    filter: drop-shadow(0 0 .35rem rgb(88 224 255 / 90%));
+    transition: opacity 220ms ease, transform 220ms ease;
+  }
+  .life.is-lost { opacity: .14; transform: scale(.7); filter: none; }
+  .shield-badge { padding: .12rem .45rem; border: 1px solid #4f8dff; border-radius: 999px; color: #d8e6ff; background: rgb(79 141 255 / 22%); box-shadow: 0 0 .8rem rgb(79 141 255 / 60%); }
+  .nova { display: flex; gap: .3rem; }
+  .nova i { inline-size: .55rem; block-size: .55rem; border-radius: 50%; background: #ff3a3a; box-shadow: 0 0 .6rem #ff3a3a; }
+  .nova i.is-empty { opacity: .16; box-shadow: none; }
+
+  .hud-score { position: absolute; inset-block-start: clamp(1rem, 2.6dvb, 1.9rem); inset-inline: 0; display: grid; justify-items: center; gap: .2rem; }
+  .score { color: #f2fbff; font-size: clamp(1.3rem, 1rem + 1.1vi, 2rem); font-weight: 300; letter-spacing: .12em; text-shadow: 0 0 1.2rem rgb(126 232 255 / 45%); }
+  .combo { color: #ffd98a; font-size: .66rem; font-weight: 650; letter-spacing: .22em; text-shadow: 0 0 .8rem rgb(255 190 80 / 70%); }
+
+  .weapon {
+    position: absolute;
+    inset-inline-start: clamp(1.3rem, 3vi, 2.8rem);
+    inset-block-end: clamp(2.2rem, 5dvb, 3.8rem);
+    display: grid;
+    gap: .3rem;
+    padding: .7rem .9rem;
+    border-inline-start: 2px solid var(--item-color);
+    background: linear-gradient(to right, color-mix(in srgb, var(--item-color) 14%, transparent), transparent);
+    transition: border-color 200ms ease;
+  }
+  .weapon-label { color: var(--muted); font-size: .56rem; letter-spacing: .26em; }
+  .weapon-name { color: #fff; font-size: clamp(1rem, .9rem + .4vi, 1.3rem); font-weight: 650; letter-spacing: .2em; text-shadow: 0 0 1rem var(--item-color); }
+  .weapon-level { display: flex; gap: .3rem; }
+  .weapon-level i { inline-size: 1.4rem; block-size: .3rem; background: var(--item-color); box-shadow: 0 0 .6rem var(--item-color); }
+  .weapon-level i.is-empty { opacity: .18; box-shadow: none; }
+  .overdrive { position: relative; inline-size: 9rem; block-size: .9rem; margin-block-start: .2rem; border: 1px solid rgb(255 194 74 / 60%); overflow: hidden; }
+  .overdrive i { position: absolute; inset: 0; transform-origin: left; transform: scaleX(var(--overdrive, 1)); background: linear-gradient(to right, rgb(255 140 30 / 70%), rgb(255 230 120 / 80%)); }
+  .overdrive span { position: relative; display: block; color: #1a0d00; font-size: .52rem; font-weight: 800; letter-spacing: .24em; line-height: .9rem; text-align: center; }
+
+  .toast { position: absolute; inset-block-start: 30%; inset-inline: 0; color: #fff; font-size: clamp(1.1rem, .9rem + 1vi, 1.9rem); font-weight: 650; letter-spacing: .3em; text-align: center; opacity: 0; text-shadow: 0 0 1.2rem var(--toast-color, var(--cyan)); }
+  .toast.is-shown { animation: toast-pop 1.4s ease-out forwards; }
   .destination { position: absolute; inset-block-start: clamp(1.3rem, 3dvb, 2.2rem); inset-inline-end: clamp(1.3rem, 3vi, 2.8rem); color: var(--muted); font-size: .68rem; letter-spacing: .22em; }
   .progress { --flight-progress: 0; position: absolute; inset-inline: clamp(1.3rem, 3vi, 2.8rem); inset-block-end: clamp(1.2rem, 3dvb, 2rem); block-size: 1px; background: rgb(126 232 255 / 16%); overflow: hidden; }
   .progress i { display: block; inline-size: calc(var(--flight-progress) * 100%); block-size: 100%; background: var(--cyan); box-shadow: 0 0 1rem var(--cyan); transition: inline-size 100ms linear; }
@@ -96,6 +160,10 @@
   .compact { background: rgb(2 5 13 / 68%); backdrop-filter: blur(.4rem); }
   .end { background: radial-gradient(circle at 50% 42%, rgb(22 58 82 / 12%), rgb(2 5 13 / 58%) 70%); backdrop-filter: blur(.15rem); }
   .end > div { display: grid; justify-items: center; gap: 1rem; }
+  .result { display: flex; gap: 2.4rem; margin: 0; }
+  .result div { display: grid; gap: .3rem; }
+  .result dt { color: var(--muted); font-size: .6rem; letter-spacing: .26em; }
+  .result dd { margin: 0; font-size: 1.5rem; font-weight: 300; letter-spacing: .1em; font-variant-numeric: tabular-nums; }
   .end button { margin-block-start: .65rem; }
   .end[data-result='complete'] .eyebrow { color: #fff1bf; }
 
@@ -121,9 +189,16 @@
     0% { opacity: 1; border-width: 1.2rem; border-color: rgb(255 73 111 / 72%); background: rgb(255 40 90 / 10%); }
     100% { opacity: 0; border-width: 0; border-color: transparent; background: transparent; }
   }
+  @keyframes toast-pop {
+    0% { opacity: 0; transform: scale(1.25); letter-spacing: .6em; }
+    12% { opacity: 1; transform: scale(1); letter-spacing: .3em; }
+    70% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-.8rem); }
+  }
 }
 
 @media (pointer: coarse) { button { min-block-size: 3.5rem; min-inline-size: 11rem; } }
 @media (max-height: 600px) { .intro { padding-block-end: 1.5rem; } .intro-copy { gap: .7rem; } .controls { gap: .25rem; padding-block: .5rem; } .mouse-control { display: none !important; } }
+@media (max-width: 720px) { .controls { display: none; } .legend { font-size: .56rem; } }
 @media (prefers-reduced-motion: reduce) { button, .life, .progress i { transition: none; } body.is-hit .impact { animation: none; } }
 @media (forced-colors: active) { button, .life { border-color: ButtonText; } .progress, .progress i { background: CanvasText; } }

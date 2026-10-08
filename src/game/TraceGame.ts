@@ -1,168 +1,259 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { GAME_CONFIG } from './config';
-import { calculateShotVelocity, createScatterTargets, segmentIntersectsSphere } from './aiming';
-import { advanceFlight, createGameState, registerCollision, registerCut } from './state';
+import { loadGameAssets } from './assets';
+import { GAME_CONFIG, HAZARD_STATS, ITEM_PRESENTATION, type HazardKind, type ItemKind, WEAPON_IDS, type WeaponId } from './config';
+import { Explosions } from './fx/Explosions';
+import { HazardField, type Hazard } from './Hazards';
+import { ItemField } from './ItemField';
+import { chooseDrop } from './drops';
+import { GLOW_TEXTURE, PlayerShip } from './PlayerShip';
+import { PostProcessing } from './render/PostProcessing';
+import { SpaceBackdrop, SUN_DIRECTION } from './render/SpaceBackdrop';
+import { advanceFlight, collectItem, comboMultiplier, consumeNova, createGameState, flightIntensity, registerCut, resolveCollision, type GameState } from './state';
+import { WeaponSystem } from './WeaponSystem';
 
-interface Trace { group: THREE.Group; body: THREE.Group; spin: THREE.Vector3; x: number; y: number }
-interface Projectile { mesh: THREE.Mesh; velocity: THREE.Vector3; volleyId: number }
-interface ParticleBurst { points: THREE.Points; velocities: Float32Array; age: number }
-
-interface UiElements {
+export interface UiElements {
   loading: HTMLElement;
+  loadingProgress: HTMLElement;
   intro: HTMLElement;
   startButton: HTMLButtonElement;
   hud: HTMLElement;
   lives: HTMLElement;
+  shield: HTMLElement;
+  nova: HTMLElement;
+  score: HTMLElement;
+  combo: HTMLElement;
+  weapon: HTMLElement;
+  weaponName: HTMLElement;
+  weaponLevel: HTMLElement;
+  overdrive: HTMLElement;
+  toast: HTMLElement;
+  itemTags: HTMLElement;
   progress: HTMLElement;
   pause: HTMLElement;
   end: HTMLElement;
   endTitle: HTMLElement;
+  endScore: HTMLElement;
+  endKills: HTMLElement;
   restartButton: HTMLButtonElement;
   status: HTMLElement;
 }
 
+interface World {
+  ship: PlayerShip;
+  hazards: HazardField;
+  items: ItemField;
+  weapons: WeaponSystem;
+}
+
+const SHIP_HOME = new THREE.Vector3(0, -1.65, 0);
+const CAMERA_HOME = new THREE.Vector3(0, 5.6, 12.5);
+const CAMERA_TARGET = new THREE.Vector3(0, -0.25, -13);
+const DUST_COUNT = 900;
+const MAX_PIXEL_RATIO = 1.5;
+const MIN_RENDER_SCALE = 0.55;
+
 export class TraceGame {
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly composer: EffectComposer;
+  private readonly post: PostProcessing;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 320);
+  private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2600);
   private readonly clock = new THREE.Clock();
-  private readonly shipRoot = new THREE.Group();
+  private readonly backdrop = new SpaceBackdrop();
+  private readonly explosions = new Explosions();
   private readonly reticle = new THREE.Group();
-  private readonly stars: THREE.Points[] = [];
-  private readonly starMaterials: THREE.PointsMaterial[] = [];
-  private readonly traces: Trace[] = [];
-  private readonly afterimages: THREE.Object3D[] = [];
-  private readonly particleBursts: ParticleBurst[] = [];
   private readonly targetStar = new THREE.Group();
-  private state = createGameState();
-  private readonly projectiles: Projectile[] = [];
-  private spawnTimer = 0.35;
-  private fireCooldown = 0;
-  private nextVolleyId = 0;
-  private pointerFiring = false;
-  private spacePressed = false;
+  private readonly dust: THREE.LineSegments;
+  private readonly dustPositions: Float32Array;
+  private readonly dustColors: Float32Array;
+  private world: World | null = null;
+  private state: GameState = createGameState();
+
+  private spawnTimer = 1.2;
+  private crystalTimer: number = GAME_CONFIG.crystalInterval * 0.6;
   private hitStop = 0;
   private approachTime = 0;
+  private endDelay = 0;
+  private shake = 0;
+  private impact = 0;
+  private novaFlash = 0;
+  private novaRadius: number | null = null;
+  private readonly novaOrigin = new THREE.Vector3();
+  private worldSpeed: number = GAME_CONFIG.hazardSpeedStart;
+
   private pointerX = 0;
   private pointerY = 0;
-  private targetX = 0;
-  private targetY = -1.65;
-  private leftPressed = false;
-  private rightPressed = false;
-  private upPressed = false;
-  private downPressed = false;
+  private targetX = SHIP_HOME.x;
+  private targetY = SHIP_HOME.y;
+  private shipVelocityX = 0;
+  private pointerFiring = false;
+  private spacePressed = false;
+  private readonly keys = new Set<string>();
+  private hudKey = '';
+  private renderScale = 1;
+  private frameTimeAverage = 1 / 60;
+  private lastFrameTime = 0;
+  private scaleCooldown = 2;
+  private readonly sunScreen = new THREE.Vector2();
+  private readonly scratch = new THREE.Vector3();
+  private readonly aimPoint = new THREE.Vector3();
 
   constructor(canvas: HTMLCanvasElement, private readonly ui: UiElements) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
-    this.scene.background = new THREE.Color(0x02050d);
-    this.scene.fog = new THREE.FogExp2(0x030713, 0.009);
-    this.camera.position.set(0, 5.6, 12.5);
-    this.camera.lookAt(0, -0.25, -13);
+    this.renderer.toneMappingExposure = 1.0;
+    this.scene.fog = new THREE.FogExp2(0x070c1c, 0.0052);
+    this.camera.position.copy(CAMERA_HOME);
+    this.camera.lookAt(CAMERA_TARGET);
 
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.72, 0.6, 0.68));
-    this.composer.addPass(new OutputPass());
+    this.scene.add(this.backdrop.group, this.explosions.group);
+    this.backdrop.bake(this.renderer);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(this.backdrop.createEnvironmentScene(), 0.04, 1, 4000).texture;
+    pmrem.dispose();
+    this.scene.environmentIntensity = 0.9;
 
-    this.buildWorld();
-    this.bindEvents();
-    this.resize();
-    void this.loadShip();
-    this.animate();
-  }
-
-  private buildWorld(): void {
-    this.scene.add(new THREE.HemisphereLight(0xb9dcff, 0x080812, 1.7));
-    const rimLight = new THREE.DirectionalLight(0x6adfff, 4.8);
-    rimLight.position.set(-7, 8, 4);
-    this.scene.add(rimLight);
-    const fillLight = new THREE.DirectionalLight(0xa06cff, 2.2);
-    fillLight.position.set(7, 2, -4);
-    this.scene.add(fillLight);
-
-    this.shipRoot.position.set(0, -1.65, 0);
-    this.shipRoot.rotation.set(0.04, Math.PI, 0);
-    this.shipRoot.scale.setScalar(0.82);
-    this.scene.add(this.shipRoot);
-    this.createStarfields();
+    this.post = new PostProcessing(this.renderer, this.scene, this.camera);
+    ({ dust: this.dust, positions: this.dustPositions, colors: this.dustColors } = this.createDust());
+    this.scene.add(this.dust);
+    this.buildLights();
     this.createTargetStar();
     this.createReticle();
+    this.bindEvents();
+    this.resize();
+    void this.load();
+    this.renderer.setAnimationLoop(this.animate);
+    if (import.meta.env.DEV) Object.assign(window, { __trace: this });
   }
 
-  private createStarfields(): void {
-    for (let layer = 0; layer < 5; layer += 1) {
-      const count = layer === 0 ? 700 : 380;
-      const positions = new Float32Array(count * 3);
-      const random = this.seededRandom(29 + layer * 17);
-      for (let index = 0; index < count; index += 1) {
-        positions[index * 3] = (random() - 0.5) * 115;
-        positions[index * 3 + 1] = (random() - 0.45) * 70;
-        positions[index * 3 + 2] = -random() * 240 + 18;
-      }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      const material = new THREE.PointsMaterial({
-        color: new THREE.Color().setHSL(0.54 + layer * 0.035, 0.72, 0.7),
-        size: layer === 0 ? 0.16 : 0.22,
-        transparent: true,
-        opacity: layer === 0 ? 0.62 : 0,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      const points = new THREE.Points(geometry, material);
-      points.visible = layer === 0;
-      this.stars.push(points);
-      this.starMaterials.push(material);
-      this.scene.add(points);
+  private buildLights(): void {
+    this.scene.add(new THREE.HemisphereLight(0x8fb4ff, 0x120a14, 0.55));
+    // 画面奥の太陽から差す暖色のrim。手前から見ると機体と隕石の輪郭に光が回る。
+    const sunLight = new THREE.DirectionalLight(0xffe2bc, 3.4);
+    sunLight.position.copy(SUN_DIRECTION).multiplyScalar(60);
+    this.scene.add(sunLight);
+    // カメラ左上後方からのkey。形状の読みやすさを担う。
+    const key = new THREE.DirectionalLight(0xd8e8ff, 2.3);
+    key.position.set(-8, 12, 14);
+    this.scene.add(key);
+    // 右下の氷惑星側から返る青い照り返し。
+    const bounce = new THREE.DirectionalLight(0x4f8dff, 1.2);
+    bounce.position.set(10, -6, -4);
+    this.scene.add(bounce);
+  }
+
+  private createDust(): { dust: THREE.LineSegments; positions: Float32Array; colors: Float32Array } {
+    const positions = new Float32Array(DUST_COUNT * 6);
+    const colors = new Float32Array(DUST_COUNT * 6);
+    for (let index = 0; index < DUST_COUNT; index += 1) {
+      const x = (Math.random() - 0.5) * 90;
+      const y = (Math.random() - 0.35) * 46;
+      const z = -Math.random() * 180 + 14;
+      positions.set([x, y, z, x, y, z - 1], index * 6);
     }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+    const dust = new THREE.LineSegments(
+      geometry,
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
+    );
+    dust.frustumCulled = false;
+    return { dust, positions, colors };
   }
 
   private createTargetStar(): void {
-    const core = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 24), new THREE.MeshBasicMaterial({ color: 0xe8fbff }));
-    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.9, 24, 24), new THREE.MeshBasicMaterial({ color: 0x67ccff, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }));
-    this.targetStar.add(core, halo);
-    this.targetStar.position.set(0, 4.5, -120);
+    const glow = (color: number, gain: number, scale: number) => {
+      const sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: GLOW_TEXTURE(), color: new THREE.Color(color).multiplyScalar(gain), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false }),
+      );
+      sprite.scale.setScalar(scale);
+      return sprite;
+    };
+    this.targetStar.add(glow(0xffffff, 6, 1.6), glow(0x8fdcff, 2, 5), glow(0x4f8dff, 0.6, 14));
+    this.targetStar.position.set(0, 4.5, -140);
     this.scene.add(this.targetStar);
   }
 
   private createReticle(): void {
-    const material = new THREE.LineBasicMaterial({ color: 0xaaf6ff, transparent: true, opacity: 0.82 });
-    const points = [new THREE.Vector3(-.65,0,0),new THREE.Vector3(-.25,0,0),new THREE.Vector3(.25,0,0),new THREE.Vector3(.65,0,0),new THREE.Vector3(0,-.65,0),new THREE.Vector3(0,-.25,0),new THREE.Vector3(0,.25,0),new THREE.Vector3(0,.65,0)];
-    this.reticle.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), material));
+    const material = new THREE.LineBasicMaterial({ color: new THREE.Color(0xaaf6ff).multiplyScalar(1.6), transparent: true, opacity: 0.85, fog: false });
+    const ring = new THREE.EllipseCurve(0, 0, 0.55, 0.55, 0, Math.PI * 2).getPoints(48).map((point) => new THREE.Vector3(point.x, point.y, 0));
+    this.reticle.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ring), material));
+    const ticks: THREE.Vector3[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const angle = (index / 4) * Math.PI * 2;
+      const direction = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
+      ticks.push(direction.clone().multiplyScalar(0.7), direction.clone().multiplyScalar(1.05));
+    }
+    this.reticle.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), material));
     this.reticle.position.set(0, 0.6, -18);
+    this.reticle.visible = false;
     this.scene.add(this.reticle);
   }
 
-  private async loadShip(): Promise<void> {
+  private async load(): Promise<void> {
     try {
-      const { scene: model } = await new GLTFLoader().loadAsync('/models/trace_fighter.glb');
-      model.traverse((child) => { if (child instanceof THREE.Mesh) { child.castShadow = true; child.receiveShadow = true; } });
-      this.shipRoot.add(model);
+      const assets = await loadGameAssets((ratio) => this.ui.loadingProgress.style.setProperty('--loaded', `${ratio}`));
+      const ship = new PlayerShip(assets.ship, this.scene);
+      ship.root.position.copy(SHIP_HOME);
+      ship.root.rotation.set(0.04, Math.PI, 0);
+      this.scene.add(ship.root);
+      ship.resetTrails();
+      const world: World = {
+        ship,
+        hazards: new HazardField(assets, this.scene),
+        items: new ItemField(assets.itemCapsule, this.scene, this.ui.itemTags),
+        weapons: new WeaponSystem(this.scene, this.explosions, assets.missile, ship),
+      };
+      await this.prewarm(assets);
+      this.world = world;
       this.ui.loading.hidden = true;
       this.ui.intro.hidden = false;
       this.ui.startButton.focus();
-    } catch {
-      this.ui.loading.innerHTML = '<div><p class="eyebrow">TRACE EFFECT</p><p>機体を読み込めませんでした</p></div>';
+    } catch (error) {
+      console.error(error);
+      this.ui.loading.innerHTML = '<div><p class="eyebrow">TRACE EFFECT</p><p>モデルを読み込めませんでした</p></div>';
     }
   }
 
+  /** 最初の撃破や取得でshader compileの引っかかりが出ないよう、代表物を一度描いておく。 */
+  private async prewarm(assets: Awaited<ReturnType<typeof loadGameAssets>>): Promise<void> {
+    const staging = new THREE.Group();
+    staging.position.set(0, 0, -40);
+    for (const template of [...assets.asteroids, assets.crystalAsteroid, ...assets.debris, assets.itemCapsule, assets.missile]) {
+      staging.add(template.clone(true));
+    }
+    this.scene.add(staging);
+    const hidden: THREE.Object3D[] = [];
+    this.explosions.group.traverse((child) => {
+      if (!child.visible) {
+        child.visible = true;
+        hidden.push(child);
+      }
+    });
+    await this.renderer.compileAsync(this.scene, this.camera);
+    for (const child of hidden) child.visible = false;
+    staging.removeFromParent();
+  }
+
   private bindEvents(): void {
-    this.ui.startButton.addEventListener('click', (event) => { event.stopPropagation(); this.start(); });
-    this.ui.restartButton.addEventListener('click', (event) => { event.stopPropagation(); this.reset(); this.start(); });
+    this.ui.startButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.start();
+    });
+    this.ui.restartButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.reset();
+      this.start();
+    });
     window.addEventListener('resize', this.resize);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerdown', this.onPointerDown, { capture: true });
     window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('contextmenu', (event) => {
+      if (this.state.phase === 'playing') event.preventDefault();
+    });
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
@@ -173,409 +264,555 @@ export class TraceGame {
     this.pointerX = THREE.MathUtils.clamp((event.clientX / window.innerWidth) * 2 - 1, -1, 1);
     this.pointerY = THREE.MathUtils.clamp(1 - (event.clientY / window.innerHeight) * 2, -1, 1);
     this.targetX = this.pointerX * GAME_CONFIG.fieldWidth * 0.5;
-    this.targetY = THREE.MathUtils.lerp(GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY, (this.pointerY + 1) * .5);
+    this.targetY = THREE.MathUtils.lerp(GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY, (this.pointerY + 1) * 0.5);
   };
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (event.button === 2) {
+      if (this.state.phase === 'playing') this.triggerNova();
+      return;
+    }
     if (event.button !== 0) return;
-    if (this.state.phase === 'ready') this.start();
-    else if (this.state.phase === 'playing') { this.pointerFiring = true; this.fire(); }
+    if (this.state.phase === 'ready' && this.world) this.start();
+    else if (this.state.phase === 'playing') this.pointerFiring = true;
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
     if (event.button === 0) this.pointerFiring = false;
   };
+
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'Escape' && (this.state.phase === 'playing' || this.state.phase === 'paused')) this.togglePause();
     if (this.state.phase !== 'playing') return;
-    if (event.code === 'ArrowLeft') { event.preventDefault(); this.leftPressed = true; }
-    if (event.code === 'ArrowRight') { event.preventDefault(); this.rightPressed = true; }
-    if (event.code === 'ArrowUp') { event.preventDefault(); this.upPressed = true; }
-    if (event.code === 'ArrowDown') { event.preventDefault(); this.downPressed = true; }
-    if (event.code === 'Space') {
-      event.preventDefault();
-      if (!this.spacePressed) this.fire();
-      this.spacePressed = true;
-    }
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(event.code)) event.preventDefault();
+    this.keys.add(event.code);
+    if (event.code === 'Space') this.spacePressed = true;
+    if ((event.code === 'KeyB' || event.code === 'ShiftLeft' || event.code === 'ShiftRight') && !event.repeat) this.triggerNova();
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
-    if (event.code === 'ArrowLeft') this.leftPressed = false;
-    if (event.code === 'ArrowRight') this.rightPressed = false;
-    if (event.code === 'ArrowUp') this.upPressed = false;
-    if (event.code === 'ArrowDown') this.downPressed = false;
+    this.keys.delete(event.code);
     if (event.code === 'Space') this.spacePressed = false;
   };
 
   private readonly onVisibilityChange = (): void => {
     if (!document.hidden || this.state.phase !== 'playing') return;
-    this.leftPressed = false;
-    this.rightPressed = false;
-    this.upPressed = false;
-    this.downPressed = false;
-    this.pointerFiring = false;
-    this.spacePressed = false;
+    this.releaseInput();
     this.togglePause();
   };
 
+  private releaseInput(): void {
+    this.keys.clear();
+    this.pointerFiring = false;
+    this.spacePressed = false;
+  }
+
   private readonly resize = (): void => {
-    const width = window.innerWidth, height = window.innerHeight;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.pixelRatio());
     this.renderer.setSize(width, height, false);
-    this.composer.setSize(width, height);
+    this.post.setSize(width, height);
+    const drawingHeight = this.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
+    this.explosions.setViewport(drawingHeight, this.camera.fov);
   };
 
+  private pixelRatio(): number {
+    return Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO) * this.renderScale;
+  }
+
+  /** 実測のframe時間から描画解像度を上下させ、60fpsを保つ（dynamic resolution）。 */
+  private adaptResolution(): void {
+    const now = performance.now();
+    const frameTime = this.lastFrameTime ? (now - this.lastFrameTime) / 1000 : 1 / 60;
+    this.lastFrameTime = now;
+    if (document.hidden || frameTime > 0.25) return;
+    this.frameTimeAverage += (frameTime - this.frameTimeAverage) * 0.05;
+    this.scaleCooldown -= frameTime;
+    if (this.scaleCooldown > 0) return;
+    let next = this.renderScale;
+    if (this.frameTimeAverage > 1 / 50) next = Math.max(MIN_RENDER_SCALE, this.renderScale - 0.1);
+    else if (this.frameTimeAverage < 1 / 58 && this.renderScale < 1) next = Math.min(1, this.renderScale + 0.05);
+    if (next !== this.renderScale) {
+      this.renderScale = next;
+      this.scaleCooldown = 1.2;
+      this.resize();
+    }
+  }
+
   private start(): void {
-    if (this.state.phase !== 'ready') return;
+    if (this.state.phase !== 'ready' || !this.world) return;
     this.state = { ...this.state, phase: 'playing' };
     this.ui.intro.hidden = true;
     this.ui.hud.hidden = false;
+    this.reticle.visible = true;
     this.ui.status.textContent = '飛行開始';
+    this.toast('LAUNCH', 0x7ee8ff);
     this.clock.getDelta();
-    this.updateUi();
+    this.updateHud(true);
   }
 
   private reset(): void {
-    this.state = createGameState(); this.spawnTimer = .35; this.fireCooldown = 0; this.hitStop = 0; this.approachTime = 0;
-    this.nextVolleyId = 0; this.pointerFiring = false; this.spacePressed = false;
-    this.pointerX = 0; this.pointerY = 0; this.targetX = 0; this.targetY = -1.65;
-    this.leftPressed = false; this.rightPressed = false; this.upPressed = false; this.downPressed = false;
-    this.shipRoot.position.set(0, -1.65, 0); this.shipRoot.rotation.set(.04, Math.PI, 0);
-    this.reticle.position.set(0, .6, -18);
-    this.clearObjects();
-    this.targetStar.position.set(0, 4.5, -120); this.targetStar.scale.setScalar(1);
-    this.ui.end.hidden = true; this.ui.pause.hidden = true; this.ui.status.textContent = '';
-    this.setDepthVisuals(0); this.updateUi();
+    this.state = createGameState();
+    this.spawnTimer = 1.2;
+    this.crystalTimer = GAME_CONFIG.crystalInterval * 0.6;
+    this.hitStop = 0;
+    this.approachTime = 0;
+    this.endDelay = 0;
+    this.novaRadius = null;
+    this.novaFlash = 0;
+    this.impact = 0;
+    this.shake = 0;
+    this.releaseInput();
+    this.pointerX = 0;
+    this.pointerY = 0;
+    this.targetX = SHIP_HOME.x;
+    this.targetY = SHIP_HOME.y;
+    this.shipVelocityX = 0;
+    if (this.world) {
+      this.world.hazards.clear();
+      this.world.items.clear();
+      this.world.weapons.clear();
+      this.world.ship.root.position.copy(SHIP_HOME);
+      this.world.ship.root.rotation.set(0.04, Math.PI, 0);
+      this.world.ship.setVisible(true);
+      this.world.ship.resetTrails();
+    }
+    this.explosions.clear();
+    this.targetStar.position.set(0, 4.5, -140);
+    this.targetStar.scale.setScalar(1);
+    this.ui.end.hidden = true;
+    this.ui.pause.hidden = true;
+    this.ui.hud.classList.remove('is-approaching');
+    this.ui.status.textContent = '';
+    this.updateHud(true);
   }
 
   private togglePause(): void {
     const paused = this.state.phase === 'playing';
     this.state = { ...this.state, phase: paused ? 'paused' : 'playing' };
-    if (paused) { this.pointerFiring = false; this.spacePressed = false; }
+    if (paused) this.releaseInput();
     this.ui.pause.hidden = !paused;
     this.ui.status.textContent = paused ? '一時停止' : '飛行再開';
     this.clock.getDelta();
   }
 
-  private fire(): void {
-    if (this.state.phase !== 'playing' || this.fireCooldown > 0) return;
-    const start = new THREE.Vector3(this.shipRoot.position.x, this.shipRoot.position.y + 1.03, -3.1);
-    const volleyId = this.nextVolleyId;
-    this.nextVolleyId += 1;
-    const targets = createScatterTargets(this.reticle.position, GAME_CONFIG.scatterSpread);
-    for (let index = 0; index < targets.length; index += 1) {
-      const isCenter = index === 0;
-      const geometry = new THREE.CapsuleGeometry(isCenter ? .12 : .075, isCenter ? 1.15 : .72, 4, 8);
-      geometry.rotateX(Math.PI / 2);
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshBasicMaterial({ color: isCenter ? 0xe4fdff : 0x65dfff, transparent: true, opacity: isCenter ? 1 : .72 }),
-      );
-      const velocity = calculateShotVelocity(start, targets[index], GAME_CONFIG.projectileSpeed);
-      mesh.position.copy(start);
-      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), velocity.clone().normalize());
-      this.scene.add(mesh);
-      this.projectiles.push({ mesh, velocity, volleyId });
-    }
-    this.fireCooldown = GAME_CONFIG.fireInterval;
+  private toast(text: string, color: number): void {
+    const element = this.ui.toast;
+    element.textContent = text;
+    element.style.setProperty('--toast-color', `#${new THREE.Color(color).getHexString()}`);
+    element.classList.remove('is-shown');
+    void element.offsetWidth;
+    element.classList.add('is-shown');
   }
 
-  private spawnTrace(): void {
-    const x = THREE.MathUtils.randFloat(-GAME_CONFIG.fieldWidth * .48, GAME_CONFIG.fieldWidth * .48);
-    const y = THREE.MathUtils.randFloat(GAME_CONFIG.fieldMinY + .4, GAME_CONFIG.fieldMaxY + 1.4);
-    const group = new THREE.Group();
-    const body = this.createMeteorBody();
-    const fireTrail = this.createMeteorTrail(46, 0xff7138, .22, .78);
-    const emberTrail = this.createMeteorTrail(28, 0xffd27a, .12, .9);
-    const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(.92, 12, 12),
-      new THREE.MeshBasicMaterial({ color: 0xff5a24, transparent: true, opacity: .08, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
-    group.add(body, fireTrail, emberTrail, halo);
-    group.position.set(x, y, -72);
-    const spin = new THREE.Vector3(
-      THREE.MathUtils.randFloat(.65, 1.2),
-      THREE.MathUtils.randFloat(.45, 1.05),
-      THREE.MathUtils.randFloat(-.7, .7),
-    );
-    this.scene.add(group); this.traces.push({ group, body, spin, x, y });
-  }
+  // ---- gameplay ----
 
-  private createMeteorBody(): THREE.Group {
-    const body = new THREE.Group();
-    const geometry = new THREE.IcosahedronGeometry(.76, 2);
-    const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
-    const vertex = new THREE.Vector3();
-    const seed = Math.random() * 100;
-    for (let index = 0; index < positions.count; index += 1) {
-      vertex.fromBufferAttribute(positions, index);
-      const noise = Math.sin(vertex.x * 17.17 + vertex.y * 31.73 + vertex.z * 47.11 + seed) * 43758.5453;
-      const scale = .82 + (noise - Math.floor(noise)) * .3;
-      vertex.normalize().multiplyScalar(.76 * scale);
-      positions.setXYZ(index, vertex.x, vertex.y * .92, vertex.z * 1.08);
-    }
-    positions.needsUpdate = true;
-    geometry.computeVertexNormals();
-    const rock = new THREE.Mesh(
-      geometry,
-      new THREE.MeshStandardMaterial({ color: 0x443c39, roughness: .96, metalness: .04, flatShading: true }),
-    );
-    body.add(rock);
-
-    const craterMaterial = new THREE.MeshStandardMaterial({ color: 0x171516, roughness: 1, side: THREE.DoubleSide });
-    const rimMaterial = new THREE.MeshStandardMaterial({ color: 0x64544a, roughness: 1 });
-    const craters = [
-      { x: -.22, y: .18, radius: .17, z: .73 },
-      { x: .27, y: -.12, radius: .12, z: .76 },
-      { x: .08, y: .34, radius: .08, z: .72 },
-    ];
-    for (const crater of craters) {
-      const pit = new THREE.Mesh(new THREE.CircleGeometry(crater.radius, 12), craterMaterial.clone());
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(crater.radius, crater.radius * .18, 6, 12), rimMaterial.clone());
-      pit.position.set(crater.x, crater.y, crater.z);
-      rim.position.copy(pit.position); rim.position.z += .012;
-      body.add(pit, rim);
-    }
-    return body;
-  }
-
-  private createMeteorTrail(count: number, color: number, size: number, opacity: number): THREE.Points {
-    const positions = new Float32Array(count * 3);
-    for (let index = 0; index < count; index += 1) {
-      const distance = THREE.MathUtils.randFloat(.7, 5.2);
-      const spread = .08 + distance * .075;
-      positions[index * 3] = THREE.MathUtils.randFloatSpread(spread);
-      positions[index * 3 + 1] = THREE.MathUtils.randFloatSpread(spread);
-      positions[index * 3 + 2] = -distance;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    return new THREE.Points(
-      geometry,
-      new THREE.PointsMaterial({ color, size, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
-  }
-
-  private updatePlaying(delta: number): void {
+  private updatePlaying(delta: number, elapsed: number, world: World): void {
+    const previousLives = this.state.lives;
     this.state = advanceFlight(this.state, delta);
-    if (this.state.phase === 'approach') { this.beginApproach(); return; }
-    const keyboardAxis = Number(this.rightPressed) - Number(this.leftPressed);
-    if (keyboardAxis !== 0) {
-      const limit = GAME_CONFIG.fieldWidth * .5;
-      this.targetX = THREE.MathUtils.clamp(this.targetX + keyboardAxis * GAME_CONFIG.keyboardMoveSpeed * delta, -limit, limit);
+    if (this.state.phase === 'approach') {
+      this.beginApproach(world);
+      return;
+    }
+    const intensity = flightIntensity(this.state.elapsed);
+    this.worldSpeed = THREE.MathUtils.lerp(GAME_CONFIG.hazardSpeedStart, GAME_CONFIG.hazardSpeedEnd, intensity);
+    this.updateInput(delta);
+    this.moveShip(delta, elapsed, world.ship);
+    this.spawnHazards(delta, intensity, world);
+    world.hazards.update(delta, elapsed);
+    this.updateNova(delta, world);
+    this.checkShipCollisions(world);
+
+    this.aimPoint.copy(this.reticle.position);
+    world.weapons.update(
+      delta,
+      elapsed,
+      {
+        weapon: this.state.weapon,
+        level: this.state.weaponLevel,
+        overdrive: this.state.overdrive > 0,
+        firing: this.pointerFiring || this.spacePressed,
+        aimPoint: this.aimPoint,
+        hazards: world.hazards.hazards,
+      },
+      this.camera,
+      this.onHazardHit,
+    );
+    this.cullHazards(world);
+    const size = this.renderer.getSize(new THREE.Vector2());
+    for (const kind of world.items.update(delta, world.ship.root.position, this.camera, size.x, size.y)) this.pickUp(kind, world);
+    if (this.state.lives > previousLives && this.state.phase === 'playing') this.announceExtend(previousLives);
+    this.updateHud(false);
+  }
+
+  private updateInput(delta: number): void {
+    const axisX = Number(this.keys.has('ArrowRight') || this.keys.has('KeyD')) - Number(this.keys.has('ArrowLeft') || this.keys.has('KeyA'));
+    const axisY = Number(this.keys.has('ArrowUp') || this.keys.has('KeyW')) - Number(this.keys.has('ArrowDown') || this.keys.has('KeyS'));
+    const limit = GAME_CONFIG.fieldWidth * 0.5;
+    if (axisX !== 0) {
+      this.targetX = THREE.MathUtils.clamp(this.targetX + axisX * GAME_CONFIG.keyboardMoveSpeed * delta, -limit, limit);
       this.pointerX = this.targetX / limit;
     }
-    const keyboardAxisY = Number(this.upPressed) - Number(this.downPressed);
-    if (keyboardAxisY !== 0) {
-      this.targetY = THREE.MathUtils.clamp(this.targetY + keyboardAxisY * GAME_CONFIG.keyboardMoveSpeedY * delta, GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY);
+    if (axisY !== 0) {
+      this.targetY = THREE.MathUtils.clamp(this.targetY + axisY * GAME_CONFIG.keyboardMoveSpeedY * delta, GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY);
       this.pointerY = THREE.MathUtils.mapLinear(this.targetY, GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY, -1, 1);
     }
-    this.fireCooldown = Math.max(0, this.fireCooldown - delta);
-    if ((this.pointerFiring || this.spacePressed) && this.fireCooldown <= 0) this.fire();
+  }
+
+  private moveShip(delta: number, elapsed: number, ship: PlayerShip): void {
+    const root = ship.root;
+    const previousX = root.position.x;
+    root.position.x = THREE.MathUtils.damp(root.position.x, this.targetX, 9, delta);
+    root.position.y = THREE.MathUtils.damp(root.position.y, this.targetY + Math.sin(elapsed * 1.7) * 0.07, 9, delta);
+    this.shipVelocityX = THREE.MathUtils.damp(this.shipVelocityX, (root.position.x - previousX) / Math.max(delta, 1e-4), 12, delta);
+    root.rotation.z = THREE.MathUtils.damp(root.rotation.z, THREE.MathUtils.clamp(this.shipVelocityX * 0.05, -0.75, 0.75), 8, delta);
+    root.rotation.x = THREE.MathUtils.damp(root.rotation.x, 0.04 - (this.targetY - root.position.y) * 0.12, 8, delta);
+    this.reticle.position.x = THREE.MathUtils.damp(this.reticle.position.x, this.targetX * 1.35, 18, delta);
+    this.reticle.position.y = THREE.MathUtils.damp(this.reticle.position.y, this.targetY + 2.25, 18, delta);
+  }
+
+  private spawnHazards(delta: number, intensity: number, world: World): void {
     this.spawnTimer -= delta;
-    if (this.spawnTimer <= 0 && this.traces.length < GAME_CONFIG.maxTraces) { this.spawnTrace(); this.spawnTimer = GAME_CONFIG.spawnInterval; }
-    this.shipRoot.position.x = THREE.MathUtils.damp(this.shipRoot.position.x, this.targetX, 22, delta);
-    this.shipRoot.position.y = THREE.MathUtils.damp(this.shipRoot.position.y, this.targetY + Math.sin(this.clock.elapsedTime * 1.7) * .07, 22, delta);
-    this.shipRoot.rotation.x = THREE.MathUtils.damp(this.shipRoot.rotation.x, .04 + this.pointerY * .08, 10, delta);
-    this.shipRoot.rotation.z = THREE.MathUtils.damp(this.shipRoot.rotation.z, -this.pointerX * .15, 10, delta);
-    this.reticle.position.x = THREE.MathUtils.damp(this.reticle.position.x, this.targetX * 1.35, 22, delta);
-    this.reticle.position.y = THREE.MathUtils.damp(this.reticle.position.y, this.targetY + 2.25, 22, delta);
-    this.updateProjectiles(delta); this.updateTraces(delta); this.updateTravel(delta); this.updateUi();
+    const maxHazards = Math.round(THREE.MathUtils.lerp(GAME_CONFIG.maxHazardsStart, GAME_CONFIG.maxHazardsEnd, intensity));
+    if (this.spawnTimer <= 0 && world.hazards.hazards.length < maxHazards) {
+      const roll = Math.random();
+      const debrisShare = 0.2 + intensity * 0.15;
+      const kind: HazardKind =
+        roll < debrisShare ? 'debris' : roll < debrisShare + 0.16 ? 'asteroidLarge' : roll < debrisShare + 0.5 ? 'asteroidMedium' : 'asteroidSmall';
+      const drop = kind === 'debris' && Math.random() < GAME_CONFIG.debrisItemChance ? chooseDrop(this.state, Math.random()) : null;
+      this.spawnHazard(kind, drop, world);
+      const interval = THREE.MathUtils.lerp(GAME_CONFIG.spawnIntervalStart, GAME_CONFIG.spawnIntervalEnd, intensity);
+      this.spawnTimer = interval * (0.65 + Math.random() * 0.7);
+    }
+    this.crystalTimer -= delta;
+    if (this.crystalTimer <= 0) {
+      this.spawnHazard('crystal', chooseDrop(this.state, Math.random()), world);
+      this.crystalTimer = GAME_CONFIG.crystalInterval * (0.8 + Math.random() * 0.4);
+    }
   }
 
-  private updateProjectiles(delta: number): void {
-    for (let projectileIndex = this.projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
-      const projectile = this.projectiles[projectileIndex];
-      const previousPosition = projectile.mesh.position.clone();
-      projectile.mesh.position.addScaledVector(projectile.velocity, delta);
-      const hitIndex = this.traces.findIndex((trace) =>
-        segmentIntersectsSphere(previousPosition, projectile.mesh.position, trace.group.position, GAME_CONFIG.meteorHitRadius),
-      );
-      if (hitIndex >= 0) {
-        this.cutTrace(hitIndex);
-        this.removeVolley(projectile.volleyId);
-        return;
+  private spawnHazard(kind: HazardKind, drop: ItemKind | null, world: World): void {
+    const halfWidth = GAME_CONFIG.fieldWidth * 0.62;
+    const start = new THREE.Vector3(
+      THREE.MathUtils.randFloat(-halfWidth, halfWidth),
+      THREE.MathUtils.randFloat(GAME_CONFIG.fieldMinY - 0.5, GAME_CONFIG.fieldMaxY + 2.5),
+      GAME_CONFIG.spawnZ,
+    );
+    const ship = world.ship.root.position;
+    const aimAtShip = Math.random() < 0.35;
+    const target = aimAtShip
+      ? new THREE.Vector3(ship.x + THREE.MathUtils.randFloatSpread(1.5), ship.y + THREE.MathUtils.randFloatSpread(1), 0)
+      : new THREE.Vector3(
+          start.x * 0.55 + THREE.MathUtils.randFloatSpread(4),
+          THREE.MathUtils.randFloat(GAME_CONFIG.fieldMinY, GAME_CONFIG.fieldMaxY),
+          0,
+        );
+    const speedScale = kind === 'asteroidSmall' ? 1.15 : kind === 'asteroidLarge' ? 0.82 : kind === 'debris' ? 0.95 : 1;
+    const velocity = target.sub(start).normalize().multiplyScalar(this.worldSpeed * speedScale);
+    world.hazards.spawn(kind, start, velocity, drop);
+  }
+
+  private readonly onHazardHit = (hazard: Hazard, damage: number): void => {
+    if (!this.world || hazard.hp <= 0) return;
+    if (this.world.hazards.damage(hazard, damage)) this.destroyHazard(hazard, this.world, true);
+  };
+
+  private destroyHazard(hazard: Hazard, world: World, scored: boolean): void {
+    hazard.hp = 0;
+    const drift = hazard.velocity.clone().multiplyScalar(0.55);
+    this.explosions.explode(hazard.position, hazard.radius, hazard.style, drift);
+    this.shake = Math.min(1.4, this.shake + hazard.radius * 0.14);
+    if (hazard.kind === 'asteroidLarge' || hazard.kind === 'crystal') this.hitStop = Math.max(this.hitStop, GAME_CONFIG.hitStopDuration);
+    if (scored) {
+      this.state = registerCut(this.state, HAZARD_STATS[hazard.kind].points);
+      const split = hazard.kind === 'asteroidLarge' ? 'asteroidMedium' : hazard.kind === 'asteroidMedium' && Math.random() < 0.6 ? 'asteroidSmall' : null;
+      if (split) {
+        for (const side of [-1, 1]) {
+          const offset = new THREE.Vector3(side * hazard.radius * 0.5, THREE.MathUtils.randFloatSpread(hazard.radius * 0.4), 0);
+          const velocity = hazard.velocity.clone().add(new THREE.Vector3(side * THREE.MathUtils.randFloat(3, 7), THREE.MathUtils.randFloatSpread(4), 0));
+          world.hazards.spawn(split, hazard.position.clone().add(offset), velocity).age = 1;
+        }
       }
-      if (projectile.mesh.position.z < -92) this.removeProjectile(projectileIndex);
+      if (hazard.drop) world.items.spawn(hazard.drop, hazard.position, hazard.velocity);
+    }
+    world.hazards.remove(hazard);
+  }
+
+  private cullHazards(world: World): void {
+    for (const hazard of [...world.hazards.hazards]) {
+      if (hazard.hp <= 0) world.hazards.remove(hazard);
+      else if (hazard.position.z > 16) world.hazards.remove(hazard);
     }
   }
 
-  private updateTraces(delta: number): void {
-    for (let index = this.traces.length - 1; index >= 0; index -= 1) {
-      const trace = this.traces[index]; trace.group.position.z += GAME_CONFIG.traceSpeed * delta;
-      trace.body.rotation.x += trace.spin.x * delta;
-      trace.body.rotation.y += trace.spin.y * delta;
-      trace.body.rotation.z += trace.spin.z * delta;
-      if (trace.group.position.z > -.3) {
-        if (Math.hypot(trace.x - this.shipRoot.position.x, trace.y - this.shipRoot.position.y) < 1.55) this.collideTrace(index);
-        else if (trace.group.position.z > 7) this.removeTrace(index);
+  private checkShipCollisions(world: World): void {
+    const ship = world.ship.root.position;
+    for (const hazard of [...world.hazards.hazards]) {
+      if (hazard.hp <= 0 || Math.abs(hazard.position.z - ship.z) > hazard.radius + 0.8) continue;
+      const lateral = Math.hypot(hazard.position.x - ship.x, hazard.position.y - ship.y);
+      if (lateral > hazard.radius * 0.85 + GAME_CONFIG.shipHitRadius) continue;
+      const { state, outcome } = resolveCollision(this.state);
+      if (outcome === 'ignored') continue;
+      this.state = state;
+      this.destroyHazard(hazard, world, false);
+      if (outcome === 'shieldBroken') {
+        world.ship.flashShield();
+        this.shake = Math.min(1.6, this.shake + 0.6);
+        this.impact = Math.max(this.impact, 0.35);
+        this.toast('SHIELD BREAK', ITEM_PRESENTATION.shield.color);
+        this.ui.status.textContent = 'シールドが被弾を防いだ';
+      } else {
+        this.shake = 1.6;
+        this.impact = 1;
+        this.flashImpact();
+        this.explosions.explode(ship, 0.9, 'ship', new THREE.Vector3(0, 0, 6));
+        if (outcome === 'gameover') {
+          world.ship.setVisible(false);
+          this.explosions.explode(ship, 2.2, 'ship', new THREE.Vector3(0, 0, 4));
+          this.endDelay = 2.2;
+          this.reticle.visible = false;
+          this.releaseInput();
+          this.ui.status.textContent = '機体を失った';
+        } else {
+          this.toast(`LIFE LOST  ×${this.state.lives}`, 0xff4a6a);
+          this.ui.status.textContent = `被弾。残機${this.state.lives}`;
+        }
       }
+      this.updateHud(true);
+      return;
     }
   }
 
-  private cutTrace(index: number): void {
-    const trace = this.traces[index]; this.createAfterimage(trace.x, trace.group.position.y, trace.group.position.z); this.removeTrace(index);
-    this.state = registerCut(this.state); this.hitStop = GAME_CONFIG.hitStopDuration; this.setDepthVisuals(this.state.depth);
-    this.ui.status.textContent = '隕石を撃ち落とした。粒子が増える'; this.updateUi();
-  }
-
-  private collideTrace(index: number): void {
-    this.removeTrace(index); this.state = registerCollision(this.state); this.setDepthVisuals(this.state.depth); this.flashImpact();
-    this.ui.status.textContent = '被弾。星空が一段薄くなる'; this.updateUi();
-    if (this.state.phase === 'gameover') this.finish(false);
-  }
-
-  private createAfterimage(x: number, y: number, z: number): void {
-    const count = 90;
-    const positions = new Float32Array(count * 3);
-    for (let index = 0; index < count; index += 1) {
-      const radius = Math.pow(Math.random(), .62) * 4.2;
-      const angle = Math.random() * Math.PI * 2;
-      positions[index * 3] = Math.cos(angle) * radius;
-      positions[index * 3 + 1] = Math.sin(angle) * radius * .7;
-      positions[index * 3 + 2] = THREE.MathUtils.randFloatSpread(4);
+  private pickUp(kind: ItemKind, world: World): void {
+    const before = this.state;
+    this.state = collectItem(this.state, kind);
+    const presentation = ITEM_PRESENTATION[kind];
+    const color = new THREE.Color(presentation.color);
+    const position = world.ship.root.position;
+    this.explosions.burst(position, color.clone().multiplyScalar(2), 40, 14, 0.5, 0.6);
+    this.explosions.ring(position, 1, 9, 0.45, color);
+    let text = presentation.label;
+    if ((WEAPON_IDS as readonly string[]).includes(kind)) {
+      text = before.weapon === kind && before.weaponLevel >= GAME_CONFIG.maxWeaponLevel ? `${presentation.label} MAX +1000` : `${presentation.label} LV${this.state.weaponLevel}`;
+    } else if (this.state.score > before.score && this.state.lives === before.lives) {
+      text = `${presentation.label} +${this.state.score - before.score}`;
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({
-      color: new THREE.Color().setHSL(.52 + this.state.depth * .045, .92, .72),
-      size: .2,
-      transparent: true,
-      opacity: .72,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const cloud = new THREE.Points(geometry, material);
-    cloud.position.set(x, y, Math.min(z, -24));
-    this.scene.add(cloud); this.afterimages.push(cloud);
-    this.createParticleBurst(x, y, z);
-    if (this.afterimages.length > 28) { const oldest = this.afterimages.shift(); if (oldest) this.disposeObject(oldest); }
+    this.toast(text, presentation.color);
+    this.ui.status.textContent = `${presentation.label}を取得`;
+    if (this.state.lives > before.lives && kind !== 'life') this.announceExtend(before.lives);
+    this.updateHud(true);
   }
 
-  private createParticleBurst(x: number, y: number, z: number): void {
-    const count = 52;
-    const positions = new Float32Array(count * 3);
-    const velocities = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-    const color = new THREE.Color();
-    for (let index = 0; index < count; index += 1) {
-      const direction = new THREE.Vector3().randomDirection();
-      const speed = THREE.MathUtils.randFloat(2.4, 8.5);
-      velocities[index * 3] = direction.x * speed;
-      velocities[index * 3 + 1] = direction.y * speed;
-      velocities[index * 3 + 2] = direction.z * speed;
-      if (Math.random() < .42) color.setHSL(THREE.MathUtils.randFloat(.035, .1), .9, .62);
-      else color.setHSL(THREE.MathUtils.randFloat(.04, .08), .12, THREE.MathUtils.randFloat(.28, .55));
-      colors[index * 3] = color.r;
-      colors[index * 3 + 1] = color.g;
-      colors[index * 3 + 2] = color.b;
+  private announceExtend(previousLives: number): void {
+    if (this.state.lives <= previousLives) return;
+    this.toast('EXTEND', ITEM_PRESENTATION.life.color);
+    this.ui.status.textContent = `残機が増えた。残機${this.state.lives}`;
+  }
+
+  private triggerNova(): void {
+    if (!this.world) return;
+    const next = consumeNova(this.state);
+    if (!next) return;
+    this.state = next;
+    this.novaOrigin.copy(this.world.ship.root.position);
+    this.novaRadius = 0;
+    this.novaFlash = 1;
+    this.shake = 1.4;
+    const red = new THREE.Color(ITEM_PRESENTATION.nova.color).multiplyScalar(2);
+    this.explosions.ring(this.novaOrigin, 2, 70, 0.9, red);
+    this.explosions.ring(this.novaOrigin, 1, 40, 0.6, new THREE.Color(2, 2, 2));
+    this.explosions.burst(this.novaOrigin, red, 160, 40, 0.6, 0.9);
+    this.toast('NOVA', ITEM_PRESENTATION.nova.color);
+    this.ui.status.textContent = 'NOVAで周囲を一掃';
+    this.updateHud(true);
+  }
+
+  /** NOVAの衝撃波は速さ140で広がり、届いたものから順に破壊する。 */
+  private updateNova(delta: number, world: World): void {
+    if (this.novaRadius === null) return;
+    this.novaRadius += delta * 140;
+    for (const hazard of [...world.hazards.hazards]) {
+      if (hazard.hp > 0 && hazard.position.distanceTo(this.novaOrigin) < this.novaRadius) this.destroyHazard(hazard, world, true);
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const material = new THREE.PointsMaterial({ vertexColors: true, size: .3, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
-    const points = new THREE.Points(geometry, material);
-    points.position.set(x, y, z);
-    this.scene.add(points);
-    this.particleBursts.push({ points, velocities, age: 0 });
+    if (this.novaRadius > Math.abs(GAME_CONFIG.spawnZ) + 20) this.novaRadius = null;
   }
 
-  private updateParticleBursts(delta: number): void {
-    for (let burstIndex = this.particleBursts.length - 1; burstIndex >= 0; burstIndex -= 1) {
-      const burst = this.particleBursts[burstIndex];
-      burst.age += delta;
-      const attribute = burst.points.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const positions = attribute.array as Float32Array;
-      for (let index = 0; index < positions.length; index += 1) positions[index] += burst.velocities[index] * delta;
-      attribute.needsUpdate = true;
-      (burst.points.material as THREE.PointsMaterial).opacity = Math.max(0, 1 - burst.age / 1.15);
-      if (burst.age >= 1.15) {
-        this.particleBursts.splice(burstIndex, 1);
-        this.disposeObject(burst.points);
-      }
-    }
+  private beginApproach(world: World): void {
+    for (const hazard of [...world.hazards.hazards]) this.destroyHazard(hazard, world, false);
+    world.items.clear();
+    this.releaseInput();
+    this.reticle.visible = false;
+    this.ui.status.textContent = '目的の星へ最接近';
+    this.ui.hud.classList.add('is-approaching');
+    this.toast('DESTINATION', 0xfff1bf);
   }
 
-  private flashImpact(): void {
-    document.body.classList.remove('is-hit'); requestAnimationFrame(() => document.body.classList.add('is-hit'));
-    window.setTimeout(() => document.body.classList.remove('is-hit'), 180);
-  }
-
-  private updateTravel(delta: number): void {
-    const progress = this.state.elapsed / GAME_CONFIG.flightDuration;
-    this.targetStar.position.z = THREE.MathUtils.lerp(-120, -64, progress); this.targetStar.scale.setScalar(THREE.MathUtils.lerp(1, 2.3, progress));
-    for (let layer = 0; layer < this.stars.length; layer += 1) { const points = this.stars[layer]; points.position.z += delta * (2.6 + layer * .35); if (points.position.z > 12) points.position.z = -28; }
-  }
-
-  private setDepthVisuals(depth: number): void {
-    for (let layer = 0; layer < this.stars.length; layer += 1) { const active = layer <= depth; this.stars[layer].visible = active; this.starMaterials[layer].opacity = layer === 0 ? .62 : active ? .48 + depth * .08 : 0; }
-    this.renderer.toneMappingExposure = 1.08;
-  }
-
-  private beginApproach(): void { this.clearHazards(); this.ui.status.textContent = '最接近'; this.ui.hud.classList.add('is-approaching'); }
-  private updateApproach(delta: number): void {
-    this.approachTime += delta; const t = Math.min(1, this.approachTime / 3.6), eased = 1 - Math.pow(1 - t, 3);
-    this.targetStar.position.z = THREE.MathUtils.lerp(-64, -9, eased);
-    this.targetStar.scale.setScalar(THREE.MathUtils.lerp(2.3, 3.2 + this.state.depth * 3.4, eased));
-    this.renderer.toneMappingExposure = 1.15 + eased * (.35 + this.state.depth * .12);
+  private updateApproach(delta: number, world: World): void {
+    this.approachTime += delta;
+    const t = Math.min(1, this.approachTime / 3.6);
+    const eased = 1 - Math.pow(1 - t, 3);
+    this.targetStar.position.z = THREE.MathUtils.lerp(-70, -16, eased);
+    this.targetStar.position.y = THREE.MathUtils.lerp(4.5, 2.5, eased);
+    this.targetStar.scale.setScalar(THREE.MathUtils.lerp(2.2, 7 + this.state.depth * 2, eased));
+    this.renderer.toneMappingExposure = 1 + eased * (0.35 + this.state.depth * 0.08);
+    world.ship.root.position.x = THREE.MathUtils.damp(world.ship.root.position.x, 0, 2, delta);
+    world.ship.root.position.y = THREE.MathUtils.damp(world.ship.root.position.y, SHIP_HOME.y, 2, delta);
+    world.ship.root.rotation.z = THREE.MathUtils.damp(world.ship.root.rotation.z, 0, 3, delta);
     if (t >= 1) this.finish(true);
   }
 
   private finish(completed: boolean): void {
-    if (completed) this.state = { ...this.state, phase: 'complete' };
-    this.pointerFiring = false; this.spacePressed = false;
-    this.ui.hud.hidden = true; this.ui.hud.classList.remove('is-approaching'); this.ui.end.hidden = false;
+    if (completed) {
+      const bonus = this.state.lives * 3000;
+      this.state = { ...this.state, phase: 'complete', score: this.state.score + bonus };
+    }
+    this.releaseInput();
+    this.renderer.toneMappingExposure = 1;
+    this.ui.hud.hidden = true;
+    this.ui.hud.classList.remove('is-approaching');
+    this.ui.end.hidden = false;
     this.ui.end.dataset.result = completed ? 'complete' : 'gameover';
     this.ui.endTitle.textContent = completed ? 'GAME CLEAR' : 'GAME OVER';
+    this.ui.endScore.textContent = this.state.score.toLocaleString('en-US');
+    this.ui.endKills.textContent = `${this.state.kills}`;
     this.ui.restartButton.focus();
   }
 
-  private updateUi(): void {
-    this.ui.lives.innerHTML = Array.from({ length: GAME_CONFIG.maxLives }, (_, index) => `<span class="life${index >= this.state.lives ? ' is-lost' : ''}" aria-hidden="true"></span>`).join('');
-    this.ui.lives.setAttribute('aria-label', `残機 ${this.state.lives}`);
-    this.ui.progress.style.setProperty('--flight-progress', `${this.state.elapsed / GAME_CONFIG.flightDuration}`);
+  private flashImpact(): void {
+    document.body.classList.remove('is-hit');
+    requestAnimationFrame(() => document.body.classList.add('is-hit'));
+    window.setTimeout(() => document.body.classList.remove('is-hit'), 180);
   }
 
-  private animate = (): void => {
-    const delta = Math.min(this.clock.getDelta(), .05), elapsed = this.clock.elapsedTime;
-    this.reticle.rotation.z = elapsed * .18; this.targetStar.rotation.y = elapsed * .1;
-    if (this.hitStop > 0) this.hitStop -= delta;
-    else if (this.state.phase === 'playing') this.updatePlaying(delta);
-    else if (this.state.phase === 'approach') this.updateApproach(delta);
-    this.updateParticleBursts(delta);
-    this.composer.render(); requestAnimationFrame(this.animate);
-  };
+  // ---- presentation ----
 
-  private removeProjectile(index: number): void {
-    const [projectile] = this.projectiles.splice(index, 1);
-    if (projectile) this.disposeObject(projectile.mesh);
+  private updateHud(force: boolean): void {
+    const state = this.state;
+    const ui = this.ui;
+    ui.score.textContent = state.score.toLocaleString('en-US');
+    ui.progress.style.setProperty('--flight-progress', `${state.elapsed / GAME_CONFIG.flightDuration}`);
+    ui.overdrive.hidden = state.overdrive <= 0;
+    if (state.overdrive > 0) ui.overdrive.style.setProperty('--overdrive', `${state.overdrive / GAME_CONFIG.overdriveDuration}`);
+    const multiplier = comboMultiplier(state.combo);
+    const key = [state.lives, state.shield, state.novaStock, state.weapon, state.weaponLevel, state.combo, multiplier].join('|');
+    if (!force && key === this.hudKey) return;
+    this.hudKey = key;
+    ui.lives.innerHTML = Array.from({ length: GAME_CONFIG.maxLives }, (_, index) => `<span class="life${index >= state.lives ? ' is-lost' : ''}"></span>`).join('');
+    ui.lives.setAttribute('aria-label', `残機 ${state.lives}`);
+    ui.shield.hidden = !state.shield;
+    ui.nova.innerHTML = Array.from({ length: GAME_CONFIG.maxNovaStock }, (_, index) => `<i class="${index >= state.novaStock ? 'is-empty' : ''}"></i>`).join('');
+    ui.nova.setAttribute('aria-label', `NOVA ${state.novaStock}`);
+    const presentation = ITEM_PRESENTATION[state.weapon as WeaponId];
+    ui.weapon.style.setProperty('--item-color', `#${new THREE.Color(presentation.color).getHexString()}`);
+    ui.weaponName.textContent = presentation.label;
+    ui.weaponLevel.innerHTML = Array.from({ length: GAME_CONFIG.maxWeaponLevel }, (_, index) => `<i class="${index >= state.weaponLevel ? 'is-empty' : ''}"></i>`).join('');
+    ui.weaponLevel.setAttribute('aria-label', `LV ${state.weaponLevel}`);
+    ui.combo.hidden = state.combo < 2;
+    ui.combo.textContent = `${state.combo} CHAIN  ×${multiplier.toFixed(1)}`;
   }
-  private removeVolley(volleyId: number): void {
-    for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
-      if (this.projectiles[index].volleyId === volleyId) this.removeProjectile(index);
+
+  private updateDust(delta: number): void {
+    const speed = this.worldSpeed * 1.6;
+    const length = 0.4 + speed * 0.05;
+    const brightness = 0.1 + this.state.depth * 0.07 + (this.state.overdrive > 0 ? 0.18 : 0);
+    const positions = this.dustPositions;
+    const colors = this.dustColors;
+    for (let index = 0; index < DUST_COUNT; index += 1) {
+      const i6 = index * 6;
+      let z = positions[i6 + 2] + speed * delta;
+      if (z > 14) {
+        z -= 180;
+        positions[i6] = positions[i6 + 3] = (Math.random() - 0.5) * 90;
+        positions[i6 + 1] = positions[i6 + 4] = (Math.random() - 0.35) * 46;
+      }
+      positions[i6 + 2] = z;
+      positions[i6 + 5] = z - length;
+      const near = THREE.MathUtils.clamp((z + 160) / 170, 0, 1);
+      const value = brightness * near * near;
+      colors[i6] = value * 0.75;
+      colors[i6 + 1] = value * 0.9;
+      colors[i6 + 2] = value * 1.1;
+      colors[i6 + 3] = colors[i6 + 4] = colors[i6 + 5] = 0;
     }
+    this.dust.geometry.attributes.position.needsUpdate = true;
+    this.dust.geometry.attributes.color.needsUpdate = true;
   }
-  private removeTrace(index: number): void { const [trace] = this.traces.splice(index, 1); if (trace) this.disposeObject(trace.group); }
-  private clearHazards(): void {
-    while (this.traces.length) this.removeTrace(this.traces.length - 1);
-    while (this.projectiles.length) this.removeProjectile(this.projectiles.length - 1);
-  }
-  private clearObjects(): void {
-    this.clearHazards();
-    while (this.afterimages.length) { const image = this.afterimages.pop(); if (image) this.disposeObject(image); }
-    while (this.particleBursts.length) { const burst = this.particleBursts.pop(); if (burst) this.disposeObject(burst.points); }
-  }
-  private disposeObject(object: THREE.Object3D): void {
-    object.removeFromParent();
-    object.traverse((child) => {
-      if (!(child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.LineSegments)) return;
-      child.geometry.dispose();
-      (Array.isArray(child.material) ? child.material : [child.material]).forEach((material) => material.dispose());
-    });
-  }
-  private seededRandom(seed: number): () => number { let value = seed; return () => { value = value * 16807 % 2147483647; return (value - 1) / 2147483646; }; }
-}
 
-export type { UiElements };
+  private updateCamera(delta: number, elapsed: number): void {
+    const ship = this.world?.ship.root.position ?? SHIP_HOME;
+    this.shake = Math.max(0, this.shake - delta * 2.2);
+    const amount = this.shake * this.shake * 0.35;
+    this.camera.position.set(
+      CAMERA_HOME.x + ship.x * 0.22 + (Math.random() - 0.5) * amount,
+      CAMERA_HOME.y + (ship.y - SHIP_HOME.y) * 0.18 + (Math.random() - 0.5) * amount,
+      CAMERA_HOME.z,
+    );
+    this.scratch.set(CAMERA_TARGET.x + ship.x * 0.3, CAMERA_TARGET.y + (ship.y - SHIP_HOME.y) * 0.1, CAMERA_TARGET.z);
+    this.camera.lookAt(this.scratch);
+    this.camera.rotateZ(-(this.world?.ship.root.rotation.z ?? 0) * 0.06 + Math.sin(elapsed * 0.4) * 0.004);
+  }
+
+  private updatePost(elapsed: number, delta: number): void {
+    const sun = this.backdrop.sunWorldPosition(this.scratch).project(this.camera);
+    const inFront = sun.z < 1;
+    this.sunScreen.set(sun.x * 0.5 + 0.5, sun.y * 0.5 + 0.5);
+    const visibility = inFront ? this.backdrop.sunVisibility(this.camera) : 0;
+    this.impact = Math.max(0, this.impact - delta * 2.4);
+    this.novaFlash = Math.max(0, this.novaFlash - delta * 2.8);
+    const bloomBoost = this.state.depth * 0.04 + (this.state.overdrive > 0 ? 0.12 : 0) + this.novaFlash * 0.3;
+    this.post.update(elapsed, this.sunScreen, visibility, this.impact, Math.pow(this.novaFlash, 3) * 0.45, bloomBoost);
+  }
+
+  private readonly animate = (): void => {
+    const rawDelta = Math.min(this.clock.getDelta(), 0.05);
+    const elapsed = this.clock.elapsedTime;
+    let delta = rawDelta;
+    if (this.hitStop > 0) {
+      this.hitStop -= rawDelta;
+      delta = rawDelta * 0.08;
+    }
+    const world = this.world;
+    const phase = this.state.phase;
+    const paused = phase === 'paused';
+    if (!paused) {
+      if (world && phase === 'playing') this.updatePlaying(delta, elapsed, world);
+      else if (world && phase === 'approach') this.updateApproach(delta, world);
+      else if (world && phase === 'gameover') {
+        world.hazards.update(delta, elapsed);
+        this.cullHazards(world);
+        if (this.endDelay > 0) {
+          this.endDelay -= delta;
+          if (this.endDelay <= 0) this.finish(false);
+        }
+      }
+      if (world) {
+        world.ship.update(delta, elapsed, {
+          throttle: 1 + Math.min(0.4, Math.abs(this.shipVelocityX) * 0.03) + (phase === 'approach' ? 0.5 : 0),
+          overdrive: this.state.overdrive > 0,
+          invulnerable: this.state.invulnerable > 0 && phase === 'playing',
+          worldSpeed: this.worldSpeed,
+          camera: this.camera,
+          exhaust: this.explosions.glow,
+        });
+        if (phase === 'ready') {
+          world.ship.root.position.y = SHIP_HOME.y + Math.sin(elapsed * 1.2) * 0.12;
+          world.ship.root.rotation.z = Math.sin(elapsed * 0.7) * 0.08;
+        }
+        world.ship.setShield(this.state.shield);
+      }
+      this.reticle.rotation.z = elapsed * 0.6;
+      this.targetStar.position.z = phase === 'approach' ? this.targetStar.position.z : THREE.MathUtils.lerp(-140, -70, flightIntensity(this.state.elapsed));
+      if (phase !== 'approach') this.targetStar.scale.setScalar(THREE.MathUtils.lerp(1, 2.2, flightIntensity(this.state.elapsed)));
+      this.explosions.update(delta, this.camera);
+      this.updateDust(delta);
+      this.updateCamera(rawDelta, elapsed);
+    }
+    this.backdrop.update(elapsed, flightIntensity(this.state.elapsed), this.camera);
+    this.updatePost(elapsed, rawDelta);
+    this.post.render();
+    this.adaptResolution();
+  };
+}
